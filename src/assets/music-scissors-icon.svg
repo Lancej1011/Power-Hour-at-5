@@ -1,0 +1,31 @@
+<svg width="400" height="400" viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Music note -->
+  <ellipse cx="200" cy="280" rx="40" ry="28" fill="#2c3e50"/>
+  <rect x="235" y="120" width="12" height="160" rx="6" fill="#2c3e50"/>
+  
+  <!-- Note flag -->
+  <path d="M 247 120 Q 280 110 300 130 Q 280 140 247 135 Z" fill="#2c3e50"/>
+  
+  <!-- Scissors cutting the note -->
+  <!-- Left blade -->
+  <ellipse cx="170" cy="180" rx="18" ry="10" fill="#ff4444" transform="rotate(-25 170 180)"/>
+  <rect x="165" y="160" width="5" height="30" rx="2.5" fill="#ff4444" transform="rotate(-25 170 180)"/>
+  
+  <!-- Right blade -->
+  <ellipse cx="230" cy="180" rx="18" ry="10" fill="#ff4444" transform="rotate(25 230 180)"/>
+  <rect x="228" y="160" width="5" height="30" rx="2.5" fill="#ff4444" transform="rotate(25 230 180)"/>
+  
+  <!-- Scissors pivot and handles -->
+  <circle cx="200" cy="170" r="8" fill="#666"/>
+  <circle cx="200" cy="170" r="4" fill="#999"/>
+  
+  <!-- Handle rings -->
+  <circle cx="170" cy="150" r="12" stroke="#ff4444" stroke-width="3" fill="none"/>
+  <circle cx="230" cy="150" r="12" stroke="#ff4444" stroke-width="3" fill="none"/>
+  
+  <!-- Cut effect lines -->
+  <path d="M 180 200 L 190 210" stroke="#ff4444" stroke-width="3" stroke-linecap="round"/>
+  <path d="M 210 210 L 220 200" stroke="#ff4444" stroke-width="3" stroke-linecap="round"/>
+  <path d="M 185 220 L 195 230" stroke="#ff4444" stroke-width="3" stroke-linecap="round"/>
+  <path d="M 205 230 L 215 220" stroke="#ff4444" stroke-width="3" stroke-linecap="round"/>
+</svg>
