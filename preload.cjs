@@ -55,5 +55,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectPlaylistImage: () => ipcRenderer.invoke('selectPlaylistImage'),
   // Clip file operations
   saveClipToFile: (clipId, buffer, clipMeta) => ipcRenderer.invoke('saveClipToFile', clipId, buffer, clipMeta),
-  getClipFromFile: (clipPath) => ipcRenderer.invoke('getClipFromFile', clipPath)
+  getClipFromFile: (clipPath) => ipcRenderer.invoke('getClipFromFile', clipPath),
+  // PowerHour-specific: YouTube meta fetch via yt-dlp
+  fetchYoutubeMeta: (url) =>
+    new Promise((resolve, reject) => {
+      const { exec } = require("child_process");
+      exec(
+        `yt-dlp --dump-json --no-playlist "${url}"`,
+        { maxBuffer: 1024 * 1024 },
+        (error, stdout) => {
+          if (error) return reject(error);
+          try {
+            const meta = JSON.parse(stdout);
+            resolve({
+              id: meta.id,
+              title: meta.title,
+              webpage_url: meta.webpage_url,
+            });
+          } catch (e) {
+            reject(e);
+          }
+        }
+      );
+    }),
 });
