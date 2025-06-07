@@ -59,6 +59,11 @@ interface ElectronAPI {
   saveClipToFile: (clipId: string, buffer: ArrayBuffer, clipMeta: any) => Promise<boolean>;
   getClipFromFile: (clipPath: string) => Promise<ArrayBuffer>;
 
+  // yt-dlp operations
+  ytDlpCheckAvailability: () => Promise<{ available: boolean; pythonCommand: string | null }>;
+  ytDlpSearch: (query: string, maxResults?: number) => Promise<{ success: boolean; data?: any; error?: string }>;
+  ytDlpGetVideoDetails: (videoId: string) => Promise<{ success: boolean; data?: any; error?: string }>;
+
   // Add other functions as needed
   [key: string]: any;
 }

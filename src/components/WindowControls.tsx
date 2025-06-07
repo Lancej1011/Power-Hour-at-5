@@ -3,7 +3,6 @@ import { Box, IconButton } from '@mui/material';
 import MinimizeIcon from '@mui/icons-material/Minimize';
 import CloseIcon from '@mui/icons-material/Close';
 import CropSquareIcon from '@mui/icons-material/CropSquare';
-import DeveloperModeIcon from '@mui/icons-material/DeveloperMode';
 
 // No global type declaration here - it's in src/types/global.d.ts
 
@@ -26,11 +25,7 @@ const WindowControls: React.FC = () => {
     }
   };
 
-  const handleOpenDevTools = () => {
-    if (window.electronAPI) {
-      (window.electronAPI as any).openDevTools();
-    }
-  };
+
 
   return (
     <Box
@@ -40,21 +35,6 @@ const WindowControls: React.FC = () => {
         WebkitAppRegion: 'no-drag',
       }}
     >
-      <IconButton
-        size="small"
-        onClick={handleOpenDevTools}
-        sx={{
-          color: 'white',
-          padding: '4px',
-          borderRadius: '4px',
-          '&:hover': {
-            backgroundColor: 'rgba(255, 255, 255, 0.1)'
-          }
-        }}
-        title="Open Developer Tools (F12)"
-      >
-        <DeveloperModeIcon fontSize="small" />
-      </IconButton>
       <IconButton
         size="small"
         onClick={handleMinimize}

@@ -3,6 +3,24 @@ const path = require('path');
 const fs = require('fs');
 const mm = require('music-metadata');
 
+// Simple logger for main process
+const logger = {
+  debug: (message, data = {}, component = 'Main') => {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[DEBUG] [${component}] ${message}`, data);
+    }
+  },
+  info: (message, data = {}, component = 'Main') => {
+    console.log(`[INFO] [${component}] ${message}`, data);
+  },
+  warn: (message, data = {}, component = 'Main') => {
+    console.warn(`[WARN] [${component}] ${message}`, data);
+  },
+  error: (message, data = {}, component = 'Main') => {
+    console.error(`[ERROR] [${component}] ${message}`, data);
+  }
+};
+
 // Default paths
 const DEFAULT_APP_DATA_FOLDER = path.join(app.getPath('userData'), 'PowerHour');
 const DEFAULT_MIX_FOLDER = path.join(DEFAULT_APP_DATA_FOLDER, 'mixes');
@@ -77,7 +95,7 @@ const saveLibraryFolder = (folder) => {
     config.libraryFolder = folder;
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
   } catch (error) {
-    console.error('Failed to save library folder:', error);
+    logger.error('Failed to save library folder', { error });
   }
 };
 
@@ -91,7 +109,7 @@ const loadConfig = () => {
       return config;
     }
   } catch (error) {
-    console.error('Failed to load config:', error);
+    logger.error('Failed to load config', { error });
   }
   return {};
 };
@@ -119,8 +137,19 @@ function createWindow () {
     }
   });
 
-  // Load your React app's build output
-  mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html'));
+  // Load your React app - check if we're in development mode
+  const isDev = process.env.NODE_ENV === 'development' || !fs.existsSync(path.join(__dirname, 'dist', 'index.html'));
+
+  if (isDev) {
+    // In development, load from Vite dev server
+    mainWindow.loadURL('http://localhost:5173');
+
+    // Open DevTools in development
+    mainWindow.webContents.openDevTools();
+  } else {
+    // In production, load from built files
+    mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html'));
+  }
 
   // Handle window control IPC events
   ipcMain.handle('window-minimize', () => {
@@ -193,27 +222,27 @@ ipcMain.handle('select-mix-folder', async () => {
 ipcMain.handle('save-mix', async (event, mix, buffer) => {
   try {
     if (!mixFolder) {
-      console.error('No mixFolder set, using default');
+      logger.warn('No mixFolder set, using default', { defaultFolder: DEFAULT_MIX_FOLDER });
       mixFolder = DEFAULT_MIX_FOLDER;
     }
 
     // Check if folder exists, create if needed
     if (!fs.existsSync(mixFolder)) {
-      console.log('Creating mix folder:', mixFolder);
+      logger.info('Creating mix folder', { mixFolder });
       fs.mkdirSync(mixFolder, { recursive: true });
     }
 
-    console.log(`Saving mix "${mix.name}" to ${mixFolder}`);
+    logger.info('Saving mix', { mixName: mix.name, mixFolder });
     const filePath = path.join(mixFolder, `${mix.id || mix.name}.wav`);
     fs.writeFileSync(filePath, Buffer.from(buffer));
 
     const metaFilePath = path.join(mixFolder, `${mix.id || mix.name}.json`);
     fs.writeFileSync(metaFilePath, JSON.stringify(mix, null, 2));
-    console.log('Successfully saved mix files at:', { wav: filePath, json: metaFilePath });
+    logger.info('Successfully saved mix files', { wav: filePath, json: metaFilePath });
 
     return true;
   } catch (error) {
-    console.error('Error saving mix:', error);
+    logger.error('Error saving mix', { error });
     return false;
   }
 });
@@ -532,6 +561,17 @@ ipcMain.handle('save-temp-clip', async (event, clipMeta, buffer) => {
   try {
     ensureDefaultFolders();
 
+    // Validate inputs
+    if (!clipMeta || !clipMeta.id) {
+      console.error('Invalid clip metadata provided');
+      return false;
+    }
+
+    if (!buffer || buffer === null) {
+      console.error('Invalid buffer provided - buffer is null or undefined');
+      return false;
+    }
+
     // Save the WAV file
     const wavPath = path.join(DEFAULT_TEMP_CLIPS_FOLDER, `${clipMeta.id}.wav`);
     fs.writeFileSync(wavPath, Buffer.from(buffer));
@@ -633,6 +673,17 @@ ipcMain.handle('clear-temp-clips', async () => {
 ipcMain.handle('save-temp-song', async (event, songMeta, buffer) => {
   try {
     ensureDefaultFolders();
+
+    // Validate inputs
+    if (!songMeta || !songMeta.id) {
+      console.error('Invalid song metadata provided');
+      return false;
+    }
+
+    if (!buffer || buffer === null) {
+      console.error('Invalid buffer provided - buffer is null or undefined');
+      return false;
+    }
 
     // Save the audio file with appropriate extension
     const extension = path.extname(songMeta.originalName || 'song.mp3');
@@ -1347,7 +1398,8 @@ ipcMain.handle('backup-original-files', async (event, mixId, originalFiles) => {
 
     // Process each original file
     for (const file of originalFiles) {
-      if (!file.path || !file.buffer) {
+      if (!file.path || !file.buffer || file.buffer === null) {
+        console.warn('Skipping file with invalid path or buffer:', file.path);
         continue;
       }
 
@@ -2148,8 +2200,8 @@ ipcMain.handle('saveClipToFile', async (event, clipId, buffer, clipMeta) => {
   try {
     ensureDefaultFolders();
 
-    if (!clipId || !buffer) {
-      console.error('Invalid clip data for saveClipToFile');
+    if (!clipId || !buffer || buffer === null) {
+      console.error('Invalid clip data for saveClipToFile - missing clipId or buffer is null');
       return { success: false, message: 'Invalid clip data' };
     }
 
@@ -2422,6 +2474,799 @@ ipcMain.handle('exportPlaylistAsAudio', async (event, playlistId) => {
     return {
       success: false,
       message: `Failed to export playlist as audio: ${error.message}`
+    };
+  }
+});
+
+// Album art extraction handler
+ipcMain.handle('extract-album-art', async (event, filePath) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return {
+        success: false,
+        message: 'File not found'
+      };
+    }
+
+    // Use music-metadata to extract album art
+    const metadata = await mm.parseFile(filePath, { duration: false });
+
+    if (metadata.common.picture && metadata.common.picture.length > 0) {
+      // Get the first picture (usually the cover art)
+      const picture = metadata.common.picture[0];
+
+      return {
+        success: true,
+        imageBuffer: picture.data.buffer.slice(
+          picture.data.byteOffset,
+          picture.data.byteOffset + picture.data.byteLength
+        ),
+        mimeType: picture.format || 'image/jpeg'
+      };
+    }
+
+    return {
+      success: false,
+      message: 'No album art found in file'
+    };
+  } catch (error) {
+    console.error('Error extracting album art:', error);
+    return {
+      success: false,
+      message: `Failed to extract album art: ${error.message}`
+    };
+  }
+});
+
+// Album art online lookup handler
+ipcMain.handle('lookup-album-art', async (event, artist, album) => {
+  try {
+    if (!artist || !album) {
+      return {
+        success: false,
+        message: 'Artist and album are required for lookup'
+      };
+    }
+
+    console.log(`Album art lookup requested for: ${artist} - ${album}`);
+
+    // Try iTunes Search API first (no API key required)
+    try {
+      const iTunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(artist + ' ' + album)}&media=music&entity=album&limit=1`;
+
+      const response = await fetch(iTunesUrl);
+      const data = await response.json();
+
+      if (data.results && data.results.length > 0) {
+        const result = data.results[0];
+        if (result.artworkUrl100) {
+          // Get higher resolution artwork by replacing the size in the URL
+          const highResArtwork = result.artworkUrl100.replace('100x100bb', '600x600bb');
+
+          console.log(`Found album art via iTunes: ${highResArtwork}`);
+          return {
+            success: true,
+            imageUrl: highResArtwork,
+            source: 'iTunes'
+          };
+        }
+      }
+    } catch (iTunesError) {
+      console.warn('iTunes lookup failed:', iTunesError.message);
+    }
+
+    // Try Last.fm API as fallback (no API key required for album.getinfo)
+    try {
+      const lastFmUrl = `https://ws.audioscrobbler.com/2.0/?method=album.getinfo&api_key=YOUR_API_KEY&artist=${encodeURIComponent(artist)}&album=${encodeURIComponent(album)}&format=json`;
+
+      // For now, skip Last.fm since it requires an API key
+      // In a production app, you would register for a Last.fm API key
+      console.log('Last.fm lookup skipped (requires API key)');
+    } catch (lastFmError) {
+      console.warn('Last.fm lookup failed:', lastFmError.message);
+    }
+
+    // Try MusicBrainz + Cover Art Archive (no API key required)
+    try {
+      // First, search for the release on MusicBrainz
+      const mbSearchUrl = `https://musicbrainz.org/ws/2/release/?query=artist:"${encodeURIComponent(artist)}" AND release:"${encodeURIComponent(album)}"&fmt=json&limit=1`;
+
+      const mbResponse = await fetch(mbSearchUrl, {
+        headers: {
+          'User-Agent': 'PHat5-MusicApp/1.0 (contact@example.com)'
+        }
+      });
+
+      const mbData = await mbResponse.json();
+
+      if (mbData.releases && mbData.releases.length > 0) {
+        const releaseId = mbData.releases[0].id;
+
+        // Try to get cover art from Cover Art Archive
+        const coverArtUrl = `https://coverartarchive.org/release/${releaseId}/front`;
+
+        // Check if cover art exists by making a HEAD request
+        const coverArtResponse = await fetch(coverArtUrl, { method: 'HEAD' });
+
+        if (coverArtResponse.ok) {
+          console.log(`Found album art via MusicBrainz/Cover Art Archive: ${coverArtUrl}`);
+          return {
+            success: true,
+            imageUrl: coverArtUrl,
+            source: 'MusicBrainz'
+          };
+        }
+      }
+    } catch (mbError) {
+      console.warn('MusicBrainz lookup failed:', mbError.message);
+    }
+
+    // No album art found from any source
+    return {
+      success: false,
+      message: 'No album art found from online sources'
+    };
+  } catch (error) {
+    console.error('Error looking up album art:', error);
+    return {
+      success: false,
+      message: `Failed to lookup album art: ${error.message}`
+    };
+  }
+});
+
+// Save drinking sound handler
+ipcMain.handle('save-drinking-sound', async (event, fileBuffer) => {
+  try {
+    ensureDefaultFolders();
+
+    // Create a unique filename for the drinking sound
+    const timestamp = Date.now();
+    const filename = `drinking_sound_${timestamp}.wav`;
+    const soundPath = path.join(DEFAULT_TEMP_CLIPS_FOLDER, filename);
+
+    // Save the file
+    fs.writeFileSync(soundPath, Buffer.from(fileBuffer));
+
+    return {
+      success: true,
+      path: soundPath,
+      message: 'Drinking sound saved successfully'
+    };
+  } catch (error) {
+    console.error('Error saving drinking sound:', error);
+    return {
+      success: false,
+      message: `Failed to save drinking sound: ${error.message}`
+    };
+  }
+});
+
+// yt-dlp handlers
+const { spawn } = require('child_process');
+
+// Execute yt-dlp command
+const executeYtDlp = (pythonCommand, args) => {
+  return new Promise((resolve, reject) => {
+    const fullArgs = ['-m', 'yt_dlp', ...args];
+    console.log('🚀 Executing yt-dlp:', pythonCommand, fullArgs.join(' '));
+
+    const process = spawn(pythonCommand, fullArgs, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: false // Disable shell to prevent argument splitting
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    process.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    process.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    process.on('close', (code) => {
+      if (code === 0) {
+        try {
+          // Parse JSON output
+          const lines = stdout.trim().split('\n').filter(line => line.trim());
+          if (lines.length === 0) {
+            resolve([]);
+            return;
+          }
+
+          const results = lines.map(line => {
+            try {
+              return JSON.parse(line);
+            } catch (e) {
+              console.warn('Failed to parse JSON line:', line);
+              return null;
+            }
+          }).filter(Boolean);
+
+          resolve(results.length === 1 ? results[0] : results);
+        } catch (error) {
+          console.error('Failed to parse yt-dlp output:', error);
+          resolve(stdout);
+        }
+      } else {
+        reject(new Error(`yt-dlp failed with code ${code}: ${stderr}`));
+      }
+    });
+
+    process.on('error', (error) => {
+      reject(error);
+    });
+  });
+};
+
+// Check if yt-dlp is available
+ipcMain.handle('yt-dlp-check-availability', async () => {
+  const pythonCommands = ['python', 'python3', 'py'];
+
+  for (const pythonCmd of pythonCommands) {
+    try {
+      console.log('🔧 Testing yt-dlp with Python command:', pythonCmd);
+      await executeYtDlp(pythonCmd, ['--version']);
+      console.log('✅ yt-dlp is available with:', pythonCmd);
+      return { available: true, pythonCommand: pythonCmd };
+    } catch (error) {
+      console.log('⚠️ yt-dlp test failed with:', pythonCmd, error.message);
+    }
+  }
+
+  return { available: false, pythonCommand: null };
+});
+
+// Search YouTube using yt-dlp
+ipcMain.handle('yt-dlp-search', async (event, query, maxResults = 25) => {
+  try {
+    console.log('🚀 Starting yt-dlp search for:', query);
+
+    // First check if yt-dlp is available and get the correct Python command
+    const pythonCommands = ['python', 'python3', 'py'];
+    let workingPythonCmd = null;
+
+    for (const pythonCmd of pythonCommands) {
+      try {
+        console.log('🔧 Testing yt-dlp with Python command:', pythonCmd);
+        await executeYtDlp(pythonCmd, ['--version']);
+        workingPythonCmd = pythonCmd;
+        console.log('✅ yt-dlp is available with:', pythonCmd);
+        break;
+      } catch (error) {
+        console.log('⚠️ yt-dlp test failed with:', pythonCmd, error.message);
+      }
+    }
+
+    if (!workingPythonCmd) {
+      throw new Error('yt-dlp not available with any Python command');
+    }
+
+    // Use yt-dlp to search YouTube
+    const searchUrl = `ytsearch${maxResults}:${query}`;
+
+    console.log('🔍 Executing yt-dlp search:', searchUrl);
+
+    // Get video information using yt-dlp
+    const videoInfos = await executeYtDlp(workingPythonCmd, [
+      searchUrl,
+      '--flat-playlist',
+      '--dump-json',
+      '--no-download'
+    ]);
+
+    console.log('📊 yt-dlp returned:', Array.isArray(videoInfos) ? videoInfos.length : 1, 'results');
+
+    return {
+      success: true,
+      data: videoInfos
+    };
+
+  } catch (error) {
+    console.error('❌ yt-dlp search failed:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// Search YouTube channels using yt-dlp - COMPLETELY REMADE
+ipcMain.handle('yt-dlp-channel-search', async (event, query, maxResults = 5, pageToken, sortOrder = 'relevance') => {
+  try {
+    console.log('🚀 Starting NEW yt-dlp channel search for:', query, 'maxResults:', maxResults, 'page:', pageToken, 'sort:', sortOrder);
+
+    // Check if yt-dlp is available and get the correct Python command
+    const pythonCommands = ['python', 'python3', 'py'];
+    let workingPythonCmd = null;
+
+    for (const pythonCmd of pythonCommands) {
+      try {
+        await executeYtDlp(pythonCmd, ['--version']);
+        workingPythonCmd = pythonCmd;
+        console.log('✅ yt-dlp is available with:', pythonCmd);
+        break;
+      } catch (error) {
+        console.log('⚠️ yt-dlp test failed with:', pythonCmd);
+      }
+    }
+
+    if (!workingPythonCmd) {
+      throw new Error('yt-dlp is not installed or not available. Please install yt-dlp: pip install yt-dlp');
+    }
+
+    // Calculate pagination
+    const page = pageToken ? parseInt(pageToken.split('_')[1]) || 1 : 1;
+    const searchLimit = maxResults * 10; // Search for more results to ensure we have enough channels
+
+    console.log('🔍 Searching for channels with query:', query, 'limit:', searchLimit);
+
+    // Use yt-dlp to search for videos and extract unique channels
+    // Use a two-step approach: first get basic results, then get detailed channel info
+    const searchUrl = `ytsearch${searchLimit}:${query}`;
+
+    console.log('🔍 Step 1: Getting basic video results...');
+    const videoResults = await executeYtDlp(workingPythonCmd, [
+      searchUrl,
+      '--flat-playlist',
+      '--dump-json',
+      '--no-download'
+    ]);
+
+    console.log('📊 yt-dlp returned:', Array.isArray(videoResults) ? videoResults.length : 1, 'video results');
+
+    // Convert to array if single result
+    const videos = Array.isArray(videoResults) ? videoResults : [videoResults];
+
+    // Extract unique channels from video results
+    const channelMap = new Map();
+    const queryLower = query.toLowerCase();
+
+    videos.forEach((video, index) => {
+      if (video.channel_id && video.channel && !channelMap.has(video.channel_id)) {
+        const channelNameLower = video.channel.toLowerCase();
+
+        // Calculate simple relevance score
+        let relevanceScore = index; // Base score (lower is better)
+
+        // Boost relevance for exact matches
+        if (channelNameLower === queryLower) {
+          relevanceScore -= 1000;
+        } else if (channelNameLower.includes(queryLower)) {
+          relevanceScore -= 500;
+        } else if (channelNameLower.startsWith(queryLower)) {
+          relevanceScore -= 250;
+        }
+
+        // Boost for music-related channels
+        if (channelNameLower.includes(' - topic')) {
+          relevanceScore -= 800; // Topic channels are official
+        } else if (channelNameLower.includes('vevo')) {
+          relevanceScore -= 600; // VEVO channels are official music
+        } else if (channelNameLower.includes('music') || channelNameLower.includes('records')) {
+          relevanceScore -= 300; // Music-related channels
+        }
+
+        // Get best thumbnail - try multiple approaches
+        let thumbnail = '';
+
+        // Method 1: Try different YouTube channel avatar URL patterns
+        if (video.channel_id) {
+          // Try the most common patterns for YouTube channel avatars
+          const channelId = video.channel_id;
+          const avatarPatterns = [
+            `https://yt3.ggpht.com/ytc/AIdro_${channelId}=s240-c-k-c0x00ffffff-no-rj`,
+            `https://yt3.ggpht.com/a/default-user=s240-c-k-c0x00ffffff-no-rj`,
+            `https://yt3.ggpht.com/ytc/${channelId}=s240-c-k-c0x00ffffff-no-rj`,
+            `https://yt3.ggpht.com/a/${channelId}=s240-c-k-c0x00ffffff-no-rj`
+          ];
+          thumbnail = avatarPatterns[0]; // Use the first pattern as primary
+        }
+
+        // Method 2: Fallback to video thumbnail if available
+        if (!thumbnail && video.thumbnails && Array.isArray(video.thumbnails)) {
+          const bestThumbnail = video.thumbnails.find(t => t.id === 'medium') ||
+                               video.thumbnails.find(t => t.width >= 320) ||
+                               video.thumbnails[0];
+          thumbnail = bestThumbnail?.url || '';
+        } else if (!thumbnail && video.thumbnail) {
+          thumbnail = video.thumbnail;
+        }
+
+        // Method 3: Final fallback - use a default YouTube icon
+        if (!thumbnail) {
+          thumbnail = 'https://www.youtube.com/img/desktop/yt_1200.png';
+        }
+
+        // Enhanced description with more channel info
+        let description = `${video.channel}`;
+        if (video.channel_follower_count) {
+          description += ` • ${video.channel_follower_count.toLocaleString()} subscribers`;
+        }
+
+        // Add channel type indicators
+        const channelTypes = [];
+        if (channelNameLower.includes(' - topic')) {
+          channelTypes.push('Official Artist Channel');
+        } else if (channelNameLower.includes('vevo')) {
+          channelTypes.push('VEVO Music');
+        } else if (channelNameLower.includes('music') || channelNameLower.includes('records')) {
+          channelTypes.push('Music Channel');
+        }
+
+        if (channelTypes.length > 0) {
+          description += ` • ${channelTypes.join(', ')}`;
+        }
+
+        // Create channel object with enhanced information
+        channelMap.set(video.channel_id, {
+          id: video.channel_id,
+          title: video.channel,
+          description: description,
+          thumbnail: thumbnail,
+          url: video.channel_url || `https://www.youtube.com/channel/${video.channel_id}`,
+          subscriber_count: video.channel_follower_count || 0,
+          video_count: null, // We don't have this from search results
+          relevance_score: relevanceScore,
+          is_topic_channel: channelNameLower.includes(' - topic'),
+          is_vevo_channel: channelNameLower.includes('vevo'),
+          is_music_channel: channelNameLower.includes('music') || channelNameLower.includes('records') || channelNameLower.includes(' - topic') || channelNameLower.includes('vevo'),
+          channel_type: channelTypes.length > 0 ? channelTypes[0] : 'Channel',
+          latest_video_title: video.title, // Store latest video as additional info
+          latest_video_date: video.upload_date
+        });
+      }
+    });
+
+    // Convert to array and get detailed channel information
+    let channels = Array.from(channelMap.values());
+    console.log('📊 Found', channels.length, 'unique channels');
+
+    // Step 2: Try to get detailed channel information for subscriber counts
+    console.log('🔍 Step 2: Getting detailed channel information...');
+    for (let i = 0; i < Math.min(channels.length, 10); i++) { // Limit to first 10 channels to avoid timeout
+      const channel = channels[i];
+      try {
+        if (channel.id) {
+          console.log(`🔍 Getting details for channel: ${channel.title} (${channel.id})`);
+
+          // Try to get channel page info
+          const channelUrl = `https://www.youtube.com/channel/${channel.id}`;
+          const channelInfo = await executeYtDlp(workingPythonCmd, [
+            channelUrl,
+            '--dump-json',
+            '--no-download',
+            '--playlist-items', '0' // Don't get videos, just channel info
+          ]);
+
+          if (channelInfo && channelInfo.subscriber_count) {
+            channel.subscriber_count = channelInfo.subscriber_count;
+            console.log(`✅ Updated subscriber count for ${channel.title}: ${channelInfo.subscriber_count}`);
+          }
+
+          if (channelInfo && channelInfo.thumbnails && channelInfo.thumbnails.length > 0) {
+            // Use the channel's actual avatar if available
+            const bestThumb = channelInfo.thumbnails.find(t => t.width >= 240) || channelInfo.thumbnails[0];
+            if (bestThumb && bestThumb.url) {
+              channel.thumbnail = bestThumb.url;
+              console.log(`✅ Updated thumbnail for ${channel.title}`);
+            }
+          }
+        }
+      } catch (error) {
+        console.log(`⚠️ Failed to get details for channel ${channel.title}:`, error.message);
+        // Continue with next channel
+      }
+    }
+
+    // Apply sorting
+    switch (sortOrder) {
+      case 'music':
+        // Prioritize music channels, then by relevance
+        channels.sort((a, b) => {
+          if (a.is_topic_channel !== b.is_topic_channel) {
+            return a.is_topic_channel ? -1 : 1;
+          }
+          if (a.is_vevo_channel !== b.is_vevo_channel) {
+            return a.is_vevo_channel ? -1 : 1;
+          }
+          if (a.is_music_channel !== b.is_music_channel) {
+            return a.is_music_channel ? -1 : 1;
+          }
+          return a.relevance_score - b.relevance_score;
+        });
+        break;
+      case 'title':
+        channels.sort((a, b) => a.title.localeCompare(b.title));
+        break;
+      case 'subscribers':
+        channels.sort((a, b) => (b.subscriber_count || 0) - (a.subscriber_count || 0));
+        break;
+      case 'relevance':
+      default:
+        channels.sort((a, b) => a.relevance_score - b.relevance_score);
+        break;
+    }
+
+    // Implement pagination
+    const startIndex = (page - 1) * maxResults;
+    const endIndex = startIndex + maxResults;
+    const paginatedChannels = channels.slice(startIndex, endIndex);
+
+    // Generate pagination info
+    const totalPages = Math.ceil(channels.length / maxResults);
+    const hasNextPage = page < totalPages;
+    const hasPrevPage = page > 1;
+
+    console.log('📄 Pagination: page', page, 'of', totalPages, '- showing', paginatedChannels.length, 'channels');
+
+    return {
+      success: true,
+      data: {
+        channels: paginatedChannels,
+        totalResults: channels.length,
+        currentPage: page,
+        totalPages: totalPages,
+        nextPageToken: hasNextPage ? `page_${page + 1}` : null,
+        prevPageToken: hasPrevPage ? `page_${page - 1}` : null,
+        resultsPerPage: maxResults
+      }
+    };
+
+  } catch (error) {
+    console.error('❌ yt-dlp channel search failed:', error);
+
+    // Provide helpful error messages
+    let errorMessage = error.message || 'Unknown error occurred';
+
+    if (errorMessage.includes('yt-dlp is not installed')) {
+      errorMessage = 'yt-dlp is not installed. Please install it with: pip install yt-dlp';
+    } else if (errorMessage.includes('command not found') || errorMessage.includes('not found')) {
+      errorMessage = 'yt-dlp command not found. Please ensure yt-dlp is installed and accessible.';
+    } else if (errorMessage.includes('network') || errorMessage.includes('connection')) {
+      errorMessage = 'Network error: Please check your internet connection and try again.';
+    } else if (errorMessage.includes('timeout')) {
+      errorMessage = 'Search timed out. Please try again with a more specific search term.';
+    }
+
+    return {
+      success: false,
+      error: errorMessage
+    };
+  }
+});
+
+// Helper function to format duration
+const formatDuration = (seconds) => {
+  if (!seconds || seconds === 0) return '0:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+};
+
+// Get videos from a specific channel using yt-dlp
+ipcMain.handle('yt-dlp-channel-videos', async (event, channelId, maxResults = 25, pageToken) => {
+  try {
+    console.log('🚀 Starting yt-dlp channel videos for:', channelId);
+
+    // First check if yt-dlp is available and get the correct Python command
+    const pythonCommands = ['python', 'python3', 'py'];
+    let workingPythonCmd = null;
+
+    for (const pythonCmd of pythonCommands) {
+      try {
+        console.log('🔧 Testing yt-dlp with Python command:', pythonCmd);
+        await executeYtDlp(pythonCmd, ['--version']);
+        workingPythonCmd = pythonCmd;
+        console.log('✅ yt-dlp is available with:', pythonCmd);
+        break;
+      } catch (error) {
+        console.log('⚠️ yt-dlp test failed with:', pythonCmd, error.message);
+      }
+    }
+
+    if (!workingPythonCmd) {
+      throw new Error('yt-dlp not available with any Python command');
+    }
+
+    // Build channel URL - handle different channel ID formats
+    let channelUrl;
+    if (channelId.startsWith('UC') || channelId.startsWith('HC')) {
+      // Standard channel ID
+      channelUrl = `https://www.youtube.com/channel/${channelId}/videos`;
+    } else if (channelId.startsWith('@')) {
+      // Handle format
+      channelUrl = `https://www.youtube.com/${channelId}/videos`;
+    } else {
+      // Custom URL or username
+      channelUrl = `https://www.youtube.com/c/${channelId}/videos`;
+    }
+
+    console.log('🔍 Executing yt-dlp channel videos for URL:', channelUrl);
+
+    // Get channel videos using yt-dlp with anti-detection measures
+    console.log(`🔍 Getting videos for channel: ${channelUrl}`);
+
+    // Try multiple strategies to avoid bot detection
+    let videoInfos;
+    const strategies = [
+      // Strategy 1: Use flat-playlist with minimal extraction
+      {
+        name: 'flat-playlist',
+        args: [
+          channelUrl,
+          '--flat-playlist',
+          '--dump-json',
+          '--no-download',
+          `--playlist-end=${maxResults}`,
+          '--extractor-args', 'youtube:skip=dash,hls'
+        ]
+      },
+      // Strategy 2: Use search within channel
+      {
+        name: 'channel-search',
+        args: [
+          `ytsearch${maxResults}:site:youtube.com/channel/${channelId}`,
+          '--flat-playlist',
+          '--dump-json',
+          '--no-download'
+        ]
+      },
+      // Strategy 3: Use channel videos URL with minimal extraction
+      {
+        name: 'videos-url',
+        args: [
+          `${channelUrl}/videos`,
+          '--flat-playlist',
+          '--dump-json',
+          '--no-download',
+          `--playlist-end=${maxResults}`,
+          '--extractor-args', 'youtube:skip=dash,hls,translated_subs'
+        ]
+      }
+    ];
+
+    let lastError;
+    for (const strategy of strategies) {
+      try {
+        console.log(`🔄 Trying strategy: ${strategy.name}`);
+        videoInfos = await executeYtDlp(workingPythonCmd, strategy.args);
+        console.log(`✅ Strategy ${strategy.name} succeeded`);
+        break;
+      } catch (error) {
+        console.log(`❌ Strategy ${strategy.name} failed:`, error.message);
+        lastError = error;
+
+        // Add delay between attempts to avoid rate limiting
+        if (strategy !== strategies[strategies.length - 1]) {
+          console.log('⏳ Waiting 2 seconds before next attempt...');
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
+    }
+
+    if (!videoInfos) {
+      throw lastError || new Error('All strategies failed to get channel videos');
+    }
+
+    console.log('📊 yt-dlp returned:', Array.isArray(videoInfos) ? videoInfos.length : 1, 'channel videos');
+
+    // Convert results to our format
+    const videos = Array.isArray(videoInfos) ? videoInfos : [videoInfos];
+
+    const convertedVideos = videos.map(video => {
+      // Get the best thumbnail available
+      let thumbnail = '';
+
+      // Handle different data structures from different strategies
+      const videoId = video.id || video.video_id || video.url?.split('v=')[1]?.split('&')[0] || '';
+
+      if (video.thumbnails && Array.isArray(video.thumbnails)) {
+        // Try to find the best quality thumbnail
+        const bestThumbnail = video.thumbnails.find(t => t.id === 'maxresdefault') ||
+                             video.thumbnails.find(t => t.id === 'hqdefault') ||
+                             video.thumbnails.find(t => t.id === 'mqdefault') ||
+                             video.thumbnails.find(t => t.width >= 480) ||
+                             video.thumbnails[video.thumbnails.length - 1]; // Last one is usually highest quality
+        thumbnail = bestThumbnail?.url || '';
+      } else if (video.thumbnail) {
+        thumbnail = video.thumbnail;
+      }
+
+      // Fallback to constructed thumbnail URL if none found
+      if (!thumbnail && videoId) {
+        thumbnail = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+      }
+
+      // Handle duration from different sources
+      let duration = video.duration || 0;
+      let durationString = video.duration_string || '';
+
+      if (!durationString && duration > 0) {
+        durationString = formatDuration(duration);
+      } else if (!durationString) {
+        durationString = '0:00';
+      }
+
+      return {
+        id: videoId,
+        video_id: videoId,
+        title: video.title || 'Unknown Title',
+        channel: video.channel || video.uploader || video.channel_name || 'Unknown Channel',
+        uploader: video.uploader || video.channel || video.channel_name || 'Unknown Channel',
+        duration: duration,
+        duration_string: durationString,
+        thumbnail: thumbnail,
+        thumbnails: video.thumbnails || [],
+        description: video.description || '',
+        upload_date: video.upload_date || video.timestamp || '',
+        view_count: video.view_count || 0,
+        like_count: video.like_count || 0,
+        url: video.url || `https://www.youtube.com/watch?v=${videoId}`
+      };
+    });
+
+    return {
+      success: true,
+      data: {
+        videos: convertedVideos,
+        totalResults: convertedVideos.length,
+        nextPageToken: null, // yt-dlp doesn't provide pagination tokens
+        prevPageToken: null
+      }
+    };
+
+  } catch (error) {
+    console.error('❌ yt-dlp channel videos failed:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// Get video details using yt-dlp
+ipcMain.handle('yt-dlp-get-video-details', async (event, videoId) => {
+  try {
+    console.log('🎬 Getting video details for:', videoId);
+
+    // First check if yt-dlp is available and get the correct Python command
+    const pythonCommands = ['python', 'python3', 'py'];
+    let workingPythonCmd = null;
+
+    for (const pythonCmd of pythonCommands) {
+      try {
+        await executeYtDlp(pythonCmd, ['--version']);
+        workingPythonCmd = pythonCmd;
+        break;
+      } catch (error) {
+        // Continue to next command
+      }
+    }
+
+    if (!workingPythonCmd) {
+      throw new Error('yt-dlp not available with any Python command');
+    }
+
+    const videoInfo = await executeYtDlp(workingPythonCmd, [
+      `https://www.youtube.com/watch?v=${videoId}`,
+      '--dump-json',
+      '--no-download'
+    ]);
+
+    return {
+      success: true,
+      data: videoInfo
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to get video details:', error);
+    return {
+      success: false,
+      error: error.message
     };
   }
 });

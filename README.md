@@ -1,6 +1,21 @@
-# Power Hour Music App
+# 🎵 PHat5 - The Ultimate Power Hour App
 
-A React-based music application for creating and playing Power Hour mixes with an immersive music visualizer experience.
+<div align="center">
+
+**Create the perfect Power Hour experience with custom playlists, stunning visualizers, and seamless audio mixing.**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![React](https://img.shields.io/badge/React-20232A?logo=react&logoColor=61DAFB)](https://reactjs.org/)
+[![Electron](https://img.shields.io/badge/Electron-191970?logo=Electron&logoColor=white)](https://www.electronjs.org/)
+
+[Download Latest Release](https://github.com/your-username/phat5/releases) • [User Guide](USER_GUIDE.md) • [Report Bug](https://github.com/your-username/phat5/issues)
+
+</div>
+
+## 🎯 What is PHat5?
+
+PHat5 is a modern, feature-rich desktop application designed to create the ultimate Power Hour experience. Whether you're hosting a party or just want to enjoy music in a unique way, PHat5 provides all the tools you need to create custom playlists with perfectly timed clips, stunning visualizations, and seamless playback.
 
 ## Features
 

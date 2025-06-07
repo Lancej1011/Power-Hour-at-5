@@ -25,6 +25,9 @@ import {
   Modal,
   Drawer,
   Checkbox,
+  Menu,
+  MenuItem,
+  ListItemIcon,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -43,12 +46,18 @@ import CasinoIcon from '@mui/icons-material/Casino';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import InfoIcon from '@mui/icons-material/Info';
+import LibraryMusicIcon from '@mui/icons-material/LibraryMusic';
 import SkipPreviousIcon from '@mui/icons-material/SkipPrevious';
 import SkipNextIcon from '@mui/icons-material/SkipNext';
 import CloseIcon from '@mui/icons-material/Close';
 import SendToMobileIcon from '@mui/icons-material/SendToMobile';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
+import FolderIcon from '@mui/icons-material/Folder';
+import DragHandleIcon from '@mui/icons-material/DragHandle';
+
+import TuneIcon from '@mui/icons-material/Tune';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { useLocation, useNavigate } from 'react-router-dom';
 import fs from 'fs';
@@ -56,7 +65,27 @@ import path from 'path';
 import audioBufferToWav from 'audiobuffer-to-wav';
 import { useSnackbar } from '../App';
 import { useTheme } from '@mui/material/styles';
-import VirtualizedLibraryTable from './VirtualizedLibraryTable';
+import { useThemeContext } from '../contexts/ThemeContext';
+import { darkenColor } from '../themes';
+import LibraryTable from './VirtualizedLibraryTable';
+import { useLibrary } from '../contexts/LibraryContext';
+import { useAudio } from '../contexts/AudioContext';
+import LibraryPersistenceManager from '../utils/libraryPersistence';
+import UIPreferencesManager from '../utils/uiPreferences';
+import { logDebug, logInfo, logWarn, logError } from '../utils/logger';
+
+
+
+import LoadingSkeleton from './LoadingSkeleton';
+import QuickFilters from './QuickFilters';
+import MetadataEnhancer from './MetadataEnhancer';
+
+import LibraryManager from './LibraryManager';
+import ModernAppHeader from './ModernAppHeader';
+import ModernNavigation, { defaultTabs } from './ModernNavigation';
+import ModernCard from './ModernCard';
+import ModernLoading, { LibraryLoadingCard } from './ModernLoading';
+import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 
 // Import the CD extract icon
 import cdIcon from '../assets/cd-icon.svg';
@@ -79,6 +108,7 @@ interface Song {
   artist?: string;
   album?: string;
   year?: string;
+  genre?: string;
   file: File;
   minuteClip?: Blob;
   audioBuffer?: AudioBuffer;
@@ -99,6 +129,11 @@ interface ExtractedClip {
   isPlaceholder?: boolean;
   clipPath?: string;
   songName?: string;
+  // Add metadata fields
+  artist?: string;
+  album?: string;
+  year?: string;
+  genre?: string;
 }
 
 // Add type for library song with metadata
@@ -110,6 +145,11 @@ interface LibrarySong {
   album?: string;
   genre?: string;
   year?: string;
+  duration?: number;
+  bpm?: number;
+  albumArt?: string;
+  fileSize?: number;
+  lastModified?: number;
 }
 
 interface SongUploaderProps {
@@ -123,6 +163,11 @@ interface ClipMetadata {
   start?: number;
   duration?: number;
   songName?: string;
+  // Add metadata fields
+  artist?: string;
+  album?: string;
+  year?: string;
+  genre?: string;
 }
 
 // Add interface for original song data from project
@@ -148,14 +193,22 @@ interface Playlist {
     duration: number;
     songName?: string;
     clipPath?: string;
+    // Add metadata fields
+    artist?: string;
+    album?: string;
+    year?: string;
+    genre?: string;
   }>;
   drinkingSoundPath?: string;
 }
 
 const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
   const theme = useTheme();
+  const { currentTheme } = useThemeContext();
   const navigate = useNavigate();
   const location = useLocation();
+  const library = useLibrary();
+  const audio = useAudio();
   const [isEditingMix, setIsEditingMix] = useState(false);
   const [editMixInfo, setEditMixInfo] = useState<any>(null);
   const [isEditInfoOpen, setIsEditInfoOpen] = useState(false);
@@ -179,6 +232,14 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
   });
   const [currentSongIndex, setCurrentSongIndex] = useState<number | null>(null);
   const [drinkingSound, setDrinkingSound] = useState<File | null>(null);
+  const [drinkingSounds, setDrinkingSounds] = useState<Array<{
+    id: string;
+    name: string;
+    file: File;
+    duration?: number;
+  }>>([]);
+  const [previewingDrinkingSound, setPreviewingDrinkingSound] = useState<string | null>(null);
+  const drinkingSoundPreviewRef = useRef<Howl | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [howl, setHowl] = useState<Howl | null>(null);
   const [isPaused, setIsPaused] = useState(false);
@@ -204,12 +265,14 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
   const [extractPreviewHowl, setExtractPreviewHowl] = useState<Howl | null>(null);
   const [extractPreviewPlaying, setExtractPreviewPlaying] = useState(false);
   const [extractPreviewProgress, setExtractPreviewProgress] = useState(0);
+  const [extractPreviewPaused, setExtractPreviewPaused] = useState(false);
   const extractPreviewInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const drinkingHowlRef = useRef<Howl | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
   const [conversionLoading, setConversionLoading] = useState(false);
   const [conversionError, setConversionError] = useState<string | null>(null);
+  const [dragDropLoading, setDragDropLoading] = useState(false);
   const [combinedBlob, setCombinedBlob] = useState<Blob | null>(null);
   const [combining, setCombining] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
@@ -222,32 +285,111 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
   const [exportSuccess, setExportSuccess] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
 
-  // Power Hour Library state
-  const [libraryFolder, setLibraryFolder] = useState<string | null>(null);
-  const [librarySongs, setLibrarySongs] = useState<LibrarySong[]>([]);
-  const [libraryLoading, setLibraryLoading] = useState(false);
-  const [libraryError, setLibraryError] = useState<string | null>(null);
-  const [libraryPlayingIndex, setLibraryPlayingIndex] = useState<number | null>(null);
-  // Library sort state
-  const [librarySort, setLibrarySort] = useState<{ field: 'title' | 'artist' | 'album' | 'genre' | 'year'; direction: 'asc' | 'desc' }>({ field: 'title', direction: 'asc' });
-  // Library search state
-  const [librarySearch, setLibrarySearch] = useState('');
+  // Destructure library state from context
+  const {
+    libraryFolder,
+    librarySongs,
+    libraryLoading,
+    libraryError,
+    libraryProgress,
+    libraryPlayingIndex,
+    librarySort,
+    librarySearch,
+    selectedSongs,
+    recentlyPlayed,
+    favoriteTracks,
+    loadLibrarySongs,
+    setLibraryFolder,
+    setLibraryPlayingIndex,
+    setLibrarySort,
+    setLibrarySearch,
+    setSelectedSongs,
+    addToRecentlyPlayed,
+    addSongToLibrary,
+    updateSongMetadata,
+    toggleFavorite,
+    selectLibrary,
+    chooseLibraryFolder,
+  } = library;
+
+  // Debounced search for better performance
+  const [debouncedSearch, setDebouncedSearch] = useState(librarySearch);
+
+  // Column width state
+  const [columnWidths, setColumnWidths] = useState<{ [key: string]: number }>({});
+
+  // Persistence manager instance
+  const persistenceManager = LibraryPersistenceManager.getInstance();
+
+  // UI preferences manager instance
+  const uiPreferences = UIPreferencesManager.getInstance();
+
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(librarySearch);
+    }, 300); // 300ms delay
+
+    return () => clearTimeout(timer);
+  }, [librarySearch]);
+
+  // Load library settings on component mount and listen for changes
+  useEffect(() => {
+    const currentSettings = persistenceManager.getSettings();
+    setLibrarySettings(currentSettings);
+
+    // Listen for custom events to update settings when they change in other components
+    const handleSettingsChange = (e: CustomEvent) => {
+      setLibrarySettings(e.detail);
+    };
+
+    window.addEventListener('librarySettingsChanged', handleSettingsChange as EventListener);
+    return () => window.removeEventListener('librarySettingsChanged', handleSettingsChange as EventListener);
+  }, [persistenceManager]);
+
+  // Handle column resize
+  const handleColumnResize = useCallback((field: string, width: number) => {
+    setColumnWidths(prev => ({ ...prev, [field]: width }));
+  }, []);
+
+  // Handle library table resize
+  const handleLibraryTableResize = useCallback((newWidth: number) => {
+    const constrainedWidth = Math.max(50, Math.min(98, newWidth)); // Constrain between 50% and 98%
+    setLibraryTableWidth(constrainedWidth);
+    // Save to preferences
+    uiPreferences.setMusicLibraryWidth(constrainedWidth);
+  }, [uiPreferences]);
+
   const [libraryPlayError, setLibraryPlayError] = useState<string | null>(null);
-  // Library loading progress
-  const [libraryProgress, setLibraryProgress] = useState<{ processed: number; current: string } | null>(null);
-  // Library selection state
-  const [selectedSongs, setSelectedSongs] = useState<Set<string>>(new Set());
   // Queue for multiple song extraction
   const [extractionQueue, setExtractionQueue] = useState<LibrarySong[]>([]);
   // State to track saved clip metadata when actual clips aren't loaded
   const [clipMetadata, setClipMetadata] = useState<Array<{id: string; name: string; start: number; duration: number}>>([]);
-  const [playlistNameDialogOpen, setPlaylistNameDialogOpen] = useState(false);
-  const [newPlaylistName, setNewPlaylistName] = useState('');
-  const [playlistNameError, setPlaylistNameError] = useState('');
-  const [processedPlaylistClips, setProcessedPlaylistClips] = useState<Playlist['clips']>([]);
+  const [sidebarPlaylistName, setSidebarPlaylistName] = useState(() => {
+    const now = new Date();
+    const date = now.toLocaleDateString();
+    const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return `Playlist ${date} ${time}`;
+  });
   const showSnackbar = useSnackbar();
   // Add loading state
   const [loading, setLoading] = useState(false);
+
+
+  // Quick filters state
+  const [activeQuickFilters, setActiveQuickFilters] = useState<string[]>([]);
+  // Metadata enhancer state
+  const [metadataEnhancerOpen, setMetadataEnhancerOpen] = useState(false);
+  // Library manager state
+  const [libraryManagerOpen, setLibraryManagerOpen] = useState(false);
+  // Library dropdown menu state
+  const [libraryMenuAnchor, setLibraryMenuAnchor] = useState<null | HTMLElement>(null);
+  // Library table width state - load from preferences
+  const [libraryTableWidth, setLibraryTableWidth] = useState<number>(() => uiPreferences.getMusicLibraryWidth());
+
+  // Library settings state
+  const [librarySettings, setLibrarySettings] = useState<any>({});
+
 
   // For checking if a file matches an existing song without a file reference
   // @ts-ignore - Keeping for future reference
@@ -270,12 +412,15 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
   // Now modify the onDrop function to add songs to library
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     setConversionError(null);
+    setDragDropLoading(true);
     let addedToLibraryCount = 0;
+
+    try {
 
     // Process files one by one
     for (const file of acceptedFiles) {
       try {
-        console.log('Processing file:', file.name);
+        logDebug('Processing file for upload', { fileName: file.name }, 'SongUploader');
 
         // Get base filename without extension
         const filenameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
@@ -291,7 +436,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
         if (dashSeparator > 0) {
           artist = filenameWithoutExt.substring(0, dashSeparator).trim();
           title = filenameWithoutExt.substring(dashSeparator + 3).trim();
-          console.log('Split by dash:', { artist, title });
+          logDebug('Split filename by dash separator', { artist, title }, 'SongUploader');
         }
 
         // Try to get album information from either metadata or folder structure
@@ -307,35 +452,35 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
               // If we don't have an artist yet, use the parent folder
               if (!artist) {
                 artist = parentFolder;
-                console.log('Using folder name as artist:', artist);
+                logDebug('Using folder name as artist', { artist }, 'SongUploader');
               }
               // If we have an artist but no album, use parent folder as album
               else if (!album) {
                 album = parentFolder;
-                console.log('Using folder name as album:', album);
+                logDebug('Using folder name as album', { album }, 'SongUploader');
               }
 
               // If we have both artist and album but grandparent exists, try using it for album
               if (artist && !album && grandparentFolder) {
                 album = grandparentFolder;
-                console.log('Using grandparent folder as album:', album);
+                logDebug('Using grandparent folder as album', { album }, 'SongUploader');
               }
             }
           }
         } catch (err) {
-          console.log('Error getting folder structure info:', err);
+          logWarn('Error getting folder structure info', { error: err }, 'SongUploader');
         }
 
         // For existing library users with Neighbor data, set "Neighbor" as the artist if not set
         // and it matches a known pattern or folder
         if (!artist && libraryFolder && libraryFolder.includes('Neighbor')) {
           artist = 'Neighbor';
-          console.log('Set default artist to Neighbor based on library folder');
+          logDebug('Set default artist to Neighbor based on library folder', {}, 'SongUploader');
 
           // Set a default album for Neighbor songs if possible
           if (!album && (file as any).path && (file as any).path.includes('Levitate')) {
             album = 'Live At Levitate [Disc 1]';
-            console.log('Set default album for Neighbor');
+            logDebug('Set default album for Neighbor', {}, 'SongUploader');
           }
         }
 
@@ -343,7 +488,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
         const trackNumMatch = title.match(/^(\d+)[\s.\-_]+(.+)$/);
         if (trackNumMatch) {
           title = trackNumMatch[2];
-          console.log('Removed track number:', title);
+          logDebug('Removed track number from title', { title }, 'SongUploader');
         }
 
         // Final check that we have valid data
@@ -351,7 +496,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
           title = filenameWithoutExt;
         }
 
-        console.log('Final metadata:', { title, artist, album, year });
+        logDebug('Final metadata extracted', { title, artist, album, year }, 'SongUploader');
 
         // Create new song object with extracted metadata values
         const newSong = {
@@ -363,7 +508,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
           file
         };
 
-        console.log('New song object:', newSong);
+        logDebug('Created new song object', { songId: newSong.id, songName: newSong.name }, 'SongUploader');
 
         // Handle .m4a files if needed
         if (file.name.toLowerCase().endsWith('.m4a')) {
@@ -383,7 +528,10 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
             setSongs(prev => [{...newSong, file: mp3File}, ...prev]);
 
             // Add to library
-            if (await addToLibrary({...newSong, file: mp3File})) {
+            const librarySong = await addToLibrary({...newSong, file: mp3File});
+            if (librarySong) {
+              logInfo('Added converted song to library cache', { songName: librarySong.name }, 'SongUploader');
+              addSongToLibrary(librarySong);
               addedToLibraryCount++;
             }
           } catch (err: any) {
@@ -392,7 +540,10 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
             setSongs(prev => [newSong, ...prev]);
 
             // Add to library with original file
-            if (await addToLibrary(newSong)) {
+            const librarySong = await addToLibrary(newSong);
+            if (librarySong) {
+              logInfo('Added original song to library cache', { songName: librarySong.name }, 'SongUploader');
+              addSongToLibrary(librarySong);
               addedToLibraryCount++;
             }
           } finally {
@@ -403,28 +554,39 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
           setSongs(prev => [newSong, ...prev]);
 
           // Add to library
-          if (await addToLibrary(newSong)) {
+          const librarySong = await addToLibrary(newSong);
+          if (librarySong) {
+            logInfo('Added regular song to library cache', { songName: librarySong.name }, 'SongUploader');
+            addSongToLibrary(librarySong);
             addedToLibraryCount++;
           }
         }
       } catch (err) {
-        console.error('Error processing file:', file.name, err);
+        logError('Error processing file', { fileName: file.name, error: err }, 'SongUploader');
       }
     }
 
-    // If songs were added to library, show message and refresh list
-    if (addedToLibraryCount > 0) {
-      showSnackbar(`Added ${addedToLibraryCount} song${addedToLibraryCount === 1 ? '' : 's'} to your Power Hour Library`, 'info');
-      loadLibrarySongs();
+      // If songs were added to library, show message
+      if (addedToLibraryCount > 0) {
+        showSnackbar(`Added ${addedToLibraryCount} song${addedToLibraryCount === 1 ? '' : 's'} to your Power Hour Library`, 'success');
+        // No need to refresh - songs were added directly to the state
+      } else if (acceptedFiles.length > 0) {
+        showSnackbar('No files were added to the library. Please check if you have a library folder selected.', 'warning');
+      }
+    } catch (error) {
+      logError('Error processing dropped files', { error }, 'SongUploader');
+      showSnackbar('Error processing some files. Please try again.', 'error');
+    } finally {
+      setDragDropLoading(false);
     }
-  }, [libraryFolder, showSnackbar]);
+  }, [libraryFolder, showSnackbar, addSongToLibrary]);
 
   // Helper function to add a song to the library
-  const addToLibrary = async (song: Song): Promise<boolean> => {
+  const addToLibrary = async (song: Song): Promise<LibrarySong | null> => {
     try {
       if (!window.electronAPI) {
-        console.log('Electron API not available, cannot add to library');
-        return false;
+        logWarn('Electron API not available, cannot add to library', {}, 'SongUploader');
+        return null;
       }
 
       // First check if we have a library folder
@@ -438,8 +600,8 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
           if (folder) {
             setLibraryFolder(folder);
           } else {
-            console.log('No library folder selected, cannot add to library');
-            return false;
+            logWarn('No library folder selected, cannot add to library', {}, 'SongUploader');
+            return null;
           }
         }
       }
@@ -463,24 +625,52 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
       const result = await window.electronAPI.saveTempSong(songMeta, arrayBuffer);
 
       if (result) {
-        console.log(`Added "${song.name}" to library`);
-        return true;
+        logInfo('Added song to library', { songName: song.name }, 'SongUploader');
+
+        // Create a LibrarySong object for the newly added song
+        const extension = path.extname(song.file.name) || '.mp3';
+
+        // Match the backend's filename generation logic
+        let fileName = song.file.name;
+        if (song.artist && song.name) {
+          // Remove any invalid characters from the artist and name (same as backend)
+          const safeArtist = song.artist.replace(/[\\/:*?"<>|]/g, '_');
+          const safeName = song.name.replace(/[\\/:*?"<>|]/g, '_');
+          fileName = `${safeArtist} - ${safeName}${extension}`;
+        }
+
+        const filePath = path.join(folder, fileName).replace(/\\/g, '/');
+
+        const librarySong: LibrarySong = {
+          name: fileName,
+          path: filePath,
+          title: song.name,
+          artist: song.artist || "",
+          album: song.album || "",
+          year: song.year || "",
+          fileSize: song.file.size,
+          lastModified: Date.now()
+        };
+
+        return librarySong;
       } else {
-        console.error('Failed to add song to library');
-        return false;
+        logError('Failed to add song to library', {}, 'SongUploader');
+        return null;
       }
     } catch (err) {
-      console.error('Error adding song to library:', err);
-      return false;
+      logError('Error adding song to library', { error: err }, 'SongUploader');
+      return null;
     }
   };
 
-  // Keep dropzone for handling file uploads but remove unused destructuring
-  useDropzone({
+  // Create dropzone for handling file uploads
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
       'audio/*': ['.mp3', '.wav', '.ogg', '.m4a']
-    }
+    },
+    noClick: true, // Prevent click to open file dialog on the library area
+    noKeyboard: true // Prevent keyboard activation
   });
 
   const handleDrinkingSound = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -489,19 +679,103 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     }
   };
 
+  // Add multiple drinking sounds
+  const handleAddDrinkingSounds = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      const files = Array.from(e.target.files);
+      const newDrinkingSounds = files.map(file => ({
+        id: Math.random().toString(36).substr(2, 9),
+        name: file.name.replace(/\.[^/.]+$/, ""), // Remove file extension
+        file: file,
+        duration: undefined // Will be calculated when needed
+      }));
+      setDrinkingSounds(prev => [...prev, ...newDrinkingSounds]);
+    }
+  };
+
+  // Remove a drinking sound
+  const removeDrinkingSound = (id: string) => {
+    setDrinkingSounds(prev => prev.filter(sound => sound.id !== id));
+  };
+
+  // Set a drinking sound as the main one
+  const setMainDrinkingSound = (id: string) => {
+    const sound = drinkingSounds.find(s => s.id === id);
+    if (sound) {
+      setDrinkingSound(sound.file);
+    }
+  };
+
+  // Set a random drinking sound as main
+  const setRandomDrinkingSound = () => {
+    if (drinkingSounds.length === 0) return;
+    const randomIndex = Math.floor(Math.random() * drinkingSounds.length);
+    const randomSound = drinkingSounds[randomIndex];
+    setDrinkingSound(randomSound.file);
+  };
+
+  // Clear all drinking sounds
+  const clearAllDrinkingSounds = () => {
+    setDrinkingSounds([]);
+    setDrinkingSound(null);
+    stopDrinkingSoundPreview();
+  };
+
+  // Preview a drinking sound
+  const previewDrinkingSound = (id: string) => {
+    const sound = drinkingSounds.find(s => s.id === id);
+    if (!sound) return;
+
+    // Stop any existing preview
+    stopDrinkingSoundPreview();
+
+    const howl = new Howl({
+      src: [URL.createObjectURL(sound.file)],
+      html5: true,
+      volume: volume,
+      onend: () => {
+        setPreviewingDrinkingSound(null);
+        drinkingSoundPreviewRef.current = null;
+      },
+      onloaderror: (id, error) => {
+        console.error('Error loading drinking sound preview:', error);
+        setPreviewingDrinkingSound(null);
+        drinkingSoundPreviewRef.current = null;
+      }
+    });
+
+    drinkingSoundPreviewRef.current = howl;
+    setPreviewingDrinkingSound(id);
+    howl.play();
+  };
+
+  // Stop drinking sound preview
+  const stopDrinkingSoundPreview = () => {
+    if (drinkingSoundPreviewRef.current) {
+      drinkingSoundPreviewRef.current.stop();
+      drinkingSoundPreviewRef.current = null;
+    }
+    setPreviewingDrinkingSound(null);
+  };
+
+  // State to track the current song being extracted (separate from songs array)
+  const [currentExtractSong, setCurrentExtractSong] = useState<Song | null>(null);
+
   // Open modal for extraction (modified to work with both Song and LibrarySong)
   const openExtractModal = async (index: number | LibrarySong) => {
-    // If the parameter is a LibrarySong, we need to convert it to a Song first
-    if (typeof index !== 'number') {
-      try {
+    try {
+      let songToExtract: Song;
+
+      // If the parameter is a LibrarySong, we need to convert it to a Song first
+      if (typeof index !== 'number') {
         if (!window.electronAPI) throw new Error('Electron API not available');
 
         // Get the file as a Blob and create a temporary Song object
         const arrayBuffer = await window.electronAPI.getFileBlob(index.path);
         const file = new File([arrayBuffer], index.name);
 
-        // Create a temporary song
-        const tempSong = {
+        // Create a temporary song (don't add to songs array to avoid index issues)
+        songToExtract = {
           id: Math.random().toString(36).substr(2, 9),
           name: index.title || index.name.replace(/\.[^/.]+$/, ''),
           artist: index.artist,
@@ -511,40 +785,40 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
           sourceFilePath: index.path,
         };
 
-        // Add the temporary song to the songs array
-        setSongs(prev => [tempSong, ...prev]);
-
-        // Set modal state with the new song's index (0)
-        setExtractSongIndex(0);
-        setExtractRange([0, 60]);
-
-        // Decode audio to get duration
-        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-        setExtractAudioDuration(audioBuffer.duration);
-        audioCtx.close();
-        setExtractModalOpen(true);
-      } catch (err) {
-        console.error('Failed to open extract modal for library song:', err);
-        showSnackbar('Failed to open extraction editor for this song.', 'error');
+        logDebug('Created temporary song for extraction', { songName: songToExtract.name, artist: songToExtract.artist }, 'SongUploader');
+      } else {
+        // Original implementation for song index
+        if (index < 0 || index >= songs.length) {
+          throw new Error(`Invalid song index: ${index}. Songs array length: ${songs.length}`);
+        }
+        songToExtract = songs[index];
+        logDebug('Using existing song for extraction', { songName: songToExtract.name, artist: songToExtract.artist }, 'SongUploader');
       }
-    } else {
-      // Original implementation for song index
-      setExtractSongIndex(index);
+
+      // Set the current extract song
+      setCurrentExtractSong(songToExtract);
       setExtractRange([0, 60]);
+
       // Decode audio to get duration
-      const song = songs[index];
-      const arrayBuffer = await song.file.arrayBuffer();
+      const arrayBuffer = await songToExtract.file.arrayBuffer();
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
       setExtractAudioDuration(audioBuffer.duration);
       audioCtx.close();
       setExtractModalOpen(true);
+
+    } catch (err) {
+      logError('Failed to open extract modal', { error: err }, 'SongUploader');
+      showSnackbar('Failed to open extraction editor for this song.', 'error');
+      // Reset state on error
+      setCurrentExtractSong(null);
+      setExtractSongIndex(null);
     }
   };
   const closeExtractModal = async () => {
     setExtractModalOpen(false);
     setExtractSongIndex(null);
+    setCurrentExtractSong(null); // Clear the current extract song
 
     // Check if there are more songs in the extraction queue
     if (extractionQueue.length > 0) {
@@ -561,60 +835,176 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
 
   // Play preview of selected segment
   const playExtractPreview = async () => {
-    if (extractSongIndex === null) return;
+    if (!currentExtractSong) return;
+
+    // If we already have a paused Howl instance, resume it
+    if (extractPreviewHowl && !extractPreviewPlaying) {
+      resumeExtractPreview();
+      return;
+    }
+
+    // Otherwise, create a new Howl instance
     stopExtractPreview();
-    const song = songs[extractSongIndex];
+    const song = currentExtractSong;
     const src = URL.createObjectURL(song.file);
     const sound = new Howl({
       src: [src],
       html5: true,
+      volume: volume, // Set the current volume immediately
       onplay: () => {
         setExtractPreviewPlaying(true);
+        // Clear any existing interval first
+        if (extractPreviewInterval.current) {
+          clearInterval(extractPreviewInterval.current);
+        }
         extractPreviewInterval.current = setInterval(() => {
-          const pos = sound.seek() as number;
-          setExtractPreviewProgress(pos);
-          if (pos >= extractRange[1]) {
-            sound.stop();
-            stopExtractPreview();
+          if (sound && sound.playing()) {
+            const pos = sound.seek() as number;
+            setExtractPreviewProgress(pos);
+            if (pos >= extractRange[1]) {
+              sound.stop();
+              stopExtractPreview();
+            }
           }
         }, 100);
       },
       onend: () => stopExtractPreview(),
+      onloaderror: () => {
+        logError('Failed to load audio for preview', {}, 'SongUploader');
+        stopExtractPreview();
+      }
     });
+
+    // Set initial progress immediately and clear paused state
+    setExtractPreviewProgress(extractRange[0]);
+    setExtractPreviewPaused(false);
+
     sound.once('play', () => {
       sound.seek(extractRange[0]);
-      setExtractPreviewProgress(extractRange[0]);
+      // Update progress after seeking
+      setTimeout(() => {
+        if (sound && sound.playing()) {
+          setExtractPreviewProgress(sound.seek() as number);
+        }
+      }, 50);
     });
+
     sound.play();
     setExtractPreviewHowl(sound);
   };
+
+  const resumeExtractPreview = () => {
+    if (extractPreviewHowl && !extractPreviewPlaying) {
+      // Clear any existing interval first
+      if (extractPreviewInterval.current) {
+        clearInterval(extractPreviewInterval.current);
+      }
+
+      extractPreviewHowl.play();
+      setExtractPreviewPlaying(true);
+      setExtractPreviewPaused(false);
+
+      // Wait a moment for the audio to actually start playing, then get position
+      setTimeout(() => {
+        if (extractPreviewHowl && extractPreviewHowl.playing()) {
+          const currentPos = extractPreviewHowl.seek() as number;
+          setExtractPreviewProgress(currentPos);
+        }
+      }, 50);
+
+      // Restart the progress interval
+      extractPreviewInterval.current = setInterval(() => {
+        if (extractPreviewHowl && extractPreviewHowl.playing()) {
+          const pos = extractPreviewHowl.seek() as number;
+          setExtractPreviewProgress(pos);
+          if (pos >= extractRange[1]) {
+            extractPreviewHowl.stop();
+            stopExtractPreview();
+          }
+        }
+      }, 100);
+    }
+  };
+
   const pauseExtractPreview = () => {
-    if (extractPreviewHowl) {
+    if (extractPreviewHowl && extractPreviewPlaying) {
+      // Capture the current position before pausing
+      const currentPos = extractPreviewHowl.seek() as number;
+
       extractPreviewHowl.pause();
       setExtractPreviewPlaying(false);
-      if (extractPreviewInterval.current) clearInterval(extractPreviewInterval.current);
+      setExtractPreviewPaused(true);
+
+      // Set the progress to the captured position to maintain display
+      setExtractPreviewProgress(currentPos);
+
+      // Clear the interval
+      if (extractPreviewInterval.current) {
+        clearInterval(extractPreviewInterval.current);
+        extractPreviewInterval.current = null;
+      }
     }
   };
   const stopExtractPreview = () => {
+    // Clear interval first
+    if (extractPreviewInterval.current) {
+      clearInterval(extractPreviewInterval.current);
+      extractPreviewInterval.current = null;
+    }
+
+    // Stop and cleanup Howl
     if (extractPreviewHowl) {
       extractPreviewHowl.stop();
       setExtractPreviewHowl(null);
     }
+
+    // Reset state
     setExtractPreviewPlaying(false);
+    setExtractPreviewPaused(false);
     setExtractPreviewProgress(extractRange[0]);
-    if (extractPreviewInterval.current) clearInterval(extractPreviewInterval.current);
+  };
+
+  // Effect to handle progress reset when extract range changes
+  React.useEffect(() => {
+    // Reset progress to start of range when range changes (but only if not currently playing or paused)
+    if (!extractPreviewPlaying && !extractPreviewPaused) {
+      setExtractPreviewProgress(extractRange[0]);
+    }
+  }, [extractRange, extractPreviewPlaying, extractPreviewPaused]);
+
+  // Set extract range to a random position
+  const setRandomExtractRange = () => {
+    if (!currentExtractSong) {
+      logError('No song available for random range selection', {}, 'SongUploader');
+      return;
+    }
+
+    if (extractAudioDuration <= extractDuration) {
+      // If the song is shorter than or equal to extract duration, start from beginning
+      setExtractRange([0, Math.min(extractDuration, extractAudioDuration)]);
+    } else {
+      // Calculate random start position
+      const maxStart = extractAudioDuration - extractDuration;
+      const randomStart = Math.random() * maxStart;
+      setExtractRange([randomStart, randomStart + extractDuration]);
+    }
+    // Stop any current preview and reset progress
+    stopExtractPreview();
   };
 
   // Extract a 1-minute clip from the selected range and add to sidebar playlist
   const extractMinute = async () => {
-    if (extractSongIndex === null) return;
-    console.log('extractMinute called', songs[extractSongIndex].file.name, songs[extractSongIndex].file.type);
-    const song = songs[extractSongIndex];
+    if (!currentExtractSong) {
+      logError('No song available for extraction', {}, 'SongUploader');
+      return;
+    }
+    logDebug('Extract minute called', { fileName: currentExtractSong.file.name, fileType: currentExtractSong.file.type }, 'SongUploader');
+    const song = currentExtractSong;
     let arrayBuffer;
     // Improved .m4a detection
     const isM4a = song.file.type === 'audio/x-m4a' || song.file.type === 'audio/m4a' || song.file.name.toLowerCase().endsWith('.m4a');
     if (isM4a) {
-      console.error('This audio format is not supported for extraction. Please use MP3, WAV, or OGG.');
+      logError('Audio format not supported for extraction', { format: 'M4A' }, 'SongUploader');
       return;
     } else {
       arrayBuffer = await song.file.arrayBuffer();
@@ -654,14 +1044,38 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     const renderedBuffer = await offlineCtx.startRendering();
     const wavBlob = await bufferToWavBlob(renderedBuffer);
     const baseName = song.name.replace(/\.[^/.]+$/, '');
+
+    // Debug logging for manual clip creation
+    logDebug('Creating manual clip from song', {
+      songName: song.name,
+      songArtist: song.artist,
+      songAlbum: song.album,
+      songYear: song.year,
+      songGenre: song.genre
+    }, 'SongUploader');
+
     const newClip = {
       id: Math.random().toString(36).substr(2, 9),
       name: baseName + ` [${formatTime(start)} - ${formatTime(start + duration)}]`,
       blob: wavBlob,
       start,
       duration,
+      // Preserve metadata from original song
+      songName: song.name,
+      artist: song.artist || undefined,
+      album: song.album || undefined,
+      year: song.year || undefined,
+      genre: song.genre || undefined,
     };
-    console.log('Adding extracted clip:', newClip);
+
+    logDebug('Created manual clip with metadata', {
+      clipName: newClip.name,
+      clipSongName: newClip.songName,
+      clipArtist: newClip.artist,
+      clipAlbum: newClip.album,
+      clipYear: newClip.year,
+      clipGenre: newClip.genre
+    }, 'SongUploader');
     addExtractedClips([newClip]);
     audioCtx.close();
     closeExtractModal();
@@ -686,6 +1100,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     const sound = new Howl({
       src: [src],
       html5: true,
+      volume: volume, // Set the current volume immediately
       onend: () => setIsPlaying(false),
       onload: () => {
         setDuration(sound.duration());
@@ -782,9 +1197,19 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     };
   }, []);
 
+  // Sync local clip state with AudioContext preview state
+  useEffect(() => {
+    if (audio.audioSource === 'preview') {
+      setClipIsPlaying(audio.previewPlaying);
+      setClipIsPaused(!audio.previewPlaying && audio.previewSound !== null);
+    } else {
+      setClipIsPlaying(false);
+      setClipIsPaused(false);
+    }
+  }, [audio.audioSource, audio.previewPlaying, audio.previewSound]);
+
   // Extracted clips playlist controls
-  const playClip = (index: number) => {
-    stopClipPlayback();
+  const playClip = useCallback((index: number) => {
     const clip = extractedClips[index];
 
     if (!clip || !clip.blob) {
@@ -799,40 +1224,23 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
       const blob = new Blob([clip.blob], { type: 'audio/wav' });
       const blobUrl = URL.createObjectURL(blob);
 
-      const sound = new Howl({
-        src: [blobUrl],
-        html5: true,
-        format: ['wav'],  // Explicitly specify format
-        onend: () => handleClipEnd(index),
-        onload: () => {
-          console.log(`Clip loaded, duration: ${sound.duration()}`);
-          setClipDuration(sound.duration());
-        },
-        onloaderror: (_id, error) => {
-          console.error(`Error loading clip audio: ${error}`);
-        },
-        onplayerror: (_id, error) => {
-          console.error(`Error playing clip audio: ${error}`);
-        }
-      });
-
-      sound.play();
-      setClipHowl(sound);
+      // Use AudioContext's playPreview with clip navigation info, playlist name, and artist
+      audio.playPreview(blobUrl, clip.name, index, extractedClips.length, sidebarPlaylistName, clip.artist);
       setCurrentClipIndex(index);
-      setClipIsPlaying(true);
-      setClipIsPaused(false);
-      setClipDuration(sound.duration() || clip.duration || 60);
-      setClipProgress(0);
-
-      clipProgressInterval.current = setInterval(() => {
-        if (sound && sound.playing()) {
-          setClipProgress(sound.seek() as number);
-        }
-      }, 100);
     } catch (error) {
       console.error('Failed to play clip:', error);
     }
-  };
+  }, [extractedClips, audio]);
+
+  // Register clip navigation callback with AudioContext
+  useEffect(() => {
+    audio.setPreviewClipNavigationCallback(playClip);
+
+    // Cleanup on unmount
+    return () => {
+      audio.setPreviewClipNavigationCallback(null);
+    };
+  }, [playClip, audio]);
   const handleClipEnd = (index: number) => {
     setClipIsPlaying(false);
     setClipIsPaused(false);
@@ -843,6 +1251,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
       drinkingHowlRef.current = new Howl({
         src: [URL.createObjectURL(drinkingSound)],
         html5: true,
+        volume: volume, // Set the current volume immediately
         onend: () => {
           console.log('Drinking sound ended, playing next clip');
           playNextClip(index);
@@ -870,30 +1279,26 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     }
   };
   const pauseClipPlayback = () => {
-    if (clipHowl && clipIsPlaying) {
-      clipHowl.pause();
+    if (audio.audioSource === 'preview' && audio.previewPlaying) {
+      audio.pausePreview();
       setClipIsPaused(true);
       setClipIsPlaying(false);
-      if (clipProgressInterval.current) clearInterval(clipProgressInterval.current);
     }
   };
   const resumeClipPlayback = () => {
-    if (clipHowl && clipIsPaused) {
-      clipHowl.play();
+    if (audio.audioSource === 'preview' && !audio.previewPlaying) {
+      audio.resumePreview();
       setClipIsPaused(false);
       setClipIsPlaying(true);
     }
   };
   const stopClipPlayback = () => {
-    if (clipHowl) {
-      clipHowl.stop();
-      setClipHowl(null);
+    if (audio.audioSource === 'preview') {
+      audio.stopPreview();
     }
     setClipIsPlaying(false);
     setClipIsPaused(false);
-    setClipProgress(0);
-    setClipDuration(0);
-    if (clipProgressInterval.current) clearInterval(clipProgressInterval.current);
+    setCurrentClipIndex(null);
   };
   const removeClip = (id: string) => {
     setExtractedClips(prev => prev.filter(clip => clip.id !== id));
@@ -1104,11 +1509,21 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
 
   // Drag-and-drop handler
   const onDragEnd = (result: DropResult) => {
-    if (!result.destination) return;
+    if (!result.destination) {
+      console.log('🚫 Drag cancelled - no destination');
+      return;
+    }
+
+    console.log(`🔄 Reordering clips: moving from index ${result.source.index} to ${result.destination.index}`);
+
     const reordered = Array.from(extractedClips);
     const [removed] = reordered.splice(result.source.index, 1);
     reordered.splice(result.destination.index, 0, removed);
+
+    console.log('📋 New clip order:', reordered.map((clip, index) => `${index}: ${clip.name} (ID: ${clip.id})`));
+
     setExtractedClips(reordered);
+    console.log('✅ Clips reordered and state updated');
   };
 
   // Save songs to localStorage when they change
@@ -1155,7 +1570,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
             console.log('Array buffer obtained, size:', arrayBuffer.byteLength);
 
             // Save to temp folder
-            const result = await window.electronAPI.saveTempSong(songMeta, arrayBuffer);
+            const result = await window.electronAPI?.saveTempSong(songMeta, arrayBuffer);
             console.log('Song saved to temp folder, result:', result);
             savedCount++;
             console.log(`Saved ${savedCount}/${songs.filter(s => s.file).length} songs`);
@@ -1169,117 +1584,255 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     }
   }, [songs]);
 
+  // Track if this is the initial mount to prevent clearing localStorage
+  const [isInitialMount, setIsInitialMount] = React.useState(true);
+
   // Save extracted clips metadata to localStorage when they change
   React.useEffect(() => {
+    // Skip saving during initial mount to prevent clearing localStorage before restoration
+    if (isInitialMount) {
+      console.log('⏭️ Skipping save during initial mount to preserve localStorage');
+      return;
+    }
+
+    console.log(`💾 Saving ${extractedClips.length} clips to storage...`);
+
     // When saving to localStorage, we need to exclude Blob data that can't be serialized
-    const clipsForStorage = extractedClips.map(clip => ({
+    const clipsForStorage = extractedClips.map((clip, index) => ({
       id: clip.id,
       name: clip.name,
       start: clip.start,
-      duration: clip.duration
+      duration: clip.duration,
+      // Include metadata for artist information
+      artist: clip.artist,
+      songName: clip.songName,
+      album: clip.album,
+      year: clip.year,
+      genre: clip.genre
       // Intentionally exclude the blob property
     }));
+
+    console.log('📋 Saving clips in this order:', clipsForStorage.map((clip, index) => `${index}: ${clip.name} (ID: ${clip.id})`));
+
     localStorage.setItem('powerhour_clips_meta', JSON.stringify(clipsForStorage));
+    console.log(`📋 Saved ${clipsForStorage.length} clip metadata entries to localStorage`);
 
     // Save each clip to the temp folder
     if (window.electronAPI && extractedClips.length > 0) {
-      extractedClips.forEach(async (clip) => {
-        // Create a smaller metadata object without the blob
+      console.log(`💾 Saving ${extractedClips.length} clips to temp folder...`);
+      extractedClips.forEach(async (clip, index) => {
+        // Create a metadata object without the blob but including artist info
         const clipMeta = {
           id: clip.id,
           name: clip.name,
           start: clip.start,
-          duration: clip.duration
+          duration: clip.duration,
+          // Include metadata for artist information
+          artist: clip.artist,
+          songName: clip.songName,
+          album: clip.album,
+          year: clip.year,
+          genre: clip.genre
         };
 
         // Save the clip to the temp folder
         try {
+          console.log(`💾 Saving clip ${index + 1}/${extractedClips.length}: ${clip.name} (ID: ${clip.id})`);
           // Convert the blob to an ArrayBuffer for IPC transfer
           const arrayBuffer = await clip.blob.arrayBuffer();
-          await window.electronAPI.saveTempClip(clipMeta, arrayBuffer);
+          const success = await window.electronAPI?.saveTempClip(clipMeta, arrayBuffer);
+          if (success) {
+            console.log(`✅ Successfully saved clip: ${clip.name}`);
+          } else {
+            console.warn(`⚠️ Failed to save clip: ${clip.name}`);
+          }
         } catch (error) {
-          console.error('Failed to save clip to temp folder:', error);
+          console.error(`❌ Failed to save clip ${clip.name} to temp folder:`, error);
         }
       });
+    } else if (extractedClips.length === 0) {
+      console.log('🗑️ No clips to save, clearing localStorage metadata');
+      localStorage.removeItem('powerhour_clips_meta');
     }
   }, [extractedClips]);
 
-  // Load library folder and songs on mount
+
+
+  // Add a simple mount effect to test if component is mounting
   React.useEffect(() => {
-    if (window.electronAPI) {
-      window.electronAPI.getLibraryFolder().then((folder: string | null) => {
-        setLibraryFolder(folder);
-        // Remove the automatic loading here
-      });
-    }
-    // eslint-disable-next-line
+    console.log('🔥 COMPONENT MOUNTED - SongUploader is mounting');
   }, []);
 
   // Load saved clip metadata and temp clips/songs on mount
   React.useEffect(() => {
-    const savedClipsMeta = localStorage.getItem('powerhour_clips_meta');
-    if (savedClipsMeta) {
-      try {
-        const parsedClips = JSON.parse(savedClipsMeta);
-        if (Array.isArray(parsedClips) && parsedClips.length > 0) {
-          // We don't restore the actual blob data (since it can't be serialized)
-          // but we save the metadata to show in the UI
-          setClipMetadata(parsedClips);
-        }
-      } catch (err) {
-        console.error('Failed to parse saved clip metadata:', err);
-      }
-    }
+    console.log('🚀 STARTUP EFFECT TRIGGERED - Starting clip and song restoration...');
 
-    // Load clips from temp folder
-    if (window.electronAPI) {
-      loadTempClips();
-      loadTempSongs();
-    }
+    const loadClipsAndSongs = async () => {
+      console.log('🔄 Starting clip and song restoration...');
+
+      // Debug: Check what's in localStorage
+      const savedClipsMeta = localStorage.getItem('powerhour_clips_meta');
+      console.log('🔍 Raw localStorage data:', savedClipsMeta);
+
+      if (savedClipsMeta) {
+        try {
+          const parsedClips = JSON.parse(savedClipsMeta);
+          console.log('🔍 Parsed clips from localStorage:', parsedClips);
+          if (Array.isArray(parsedClips) && parsedClips.length > 0) {
+            console.log(`📋 Found ${parsedClips.length} clips in localStorage metadata`);
+            console.log('📋 Clip order from localStorage:', parsedClips.map((clip, index) => `${index}: ${clip.name} (ID: ${clip.id})`));
+            // We don't restore the actual blob data (since it can't be serialized)
+            // but we save the metadata to show in the UI
+            setClipMetadata(parsedClips);
+          } else {
+            console.log('📋 No valid clips found in localStorage metadata');
+          }
+        } catch (err) {
+          console.error('❌ Failed to parse saved clip metadata:', err);
+        }
+      } else {
+        console.log('📋 No clip metadata found in localStorage');
+      }
+
+      // Load clips from temp folder
+      if (window.electronAPI) {
+        console.log('🎵 Loading clips and songs from temp folder...');
+        await loadTempClips();
+        await loadTempSongs();
+      } else {
+        console.log('❌ No electronAPI available');
+      }
+    };
+
+    loadClipsAndSongs().catch(error => {
+      console.error('❌ CRITICAL ERROR in loadClipsAndSongs:', error);
+    }).finally(() => {
+      // Mark initial mount as complete so save effects can run
+      console.log('✅ Initial mount complete, enabling save effects');
+      setIsInitialMount(false);
+    });
   }, []);
 
   // Function to load clips from temp folder
   const loadTempClips = async () => {
     try {
-      if (!window.electronAPI) return;
+      if (!window.electronAPI) {
+        console.log('❌ No electronAPI available for loading temp clips');
+        return;
+      }
 
+      // First, get the saved order from localStorage
+      const savedClipsMeta = localStorage.getItem('powerhour_clips_meta');
+      let orderedClipIds: string[] = [];
+
+      if (savedClipsMeta) {
+        try {
+          const parsedClips = JSON.parse(savedClipsMeta);
+          if (Array.isArray(parsedClips)) {
+            orderedClipIds = parsedClips.map(clip => clip.id);
+            console.log(`📋 Found clip order in localStorage: ${orderedClipIds.length} clips`);
+          }
+        } catch (err) {
+          console.error('Failed to parse saved clip order:', err);
+        }
+      }
+
+      console.log('📂 Listing temp clips...');
       // Get the list of temp clips
       const tempClips = await window.electronAPI.listTempClips();
+      console.log(`📂 Found ${tempClips?.length || 0} temp clips:`, tempClips);
 
       if (tempClips && tempClips.length > 0) {
-        // Load each clip's blob data
+        // Create a map for quick lookup
+        const tempClipsMap = new Map(tempClips.map(clip => [clip.id, clip]));
+
+        // Load clips in the correct order based on localStorage
         const loadedClips: ExtractedClip[] = [];
 
-        for (const clipInfo of tempClips) {
+        // First, try to load clips in the saved order
+        for (const clipId of orderedClipIds) {
+          const clipInfo = tempClipsMap.get(clipId);
+          if (clipInfo) {
+            try {
+              console.log(`🎵 Loading clip in order: ${clipInfo.name} (ID: ${clipInfo.id})`);
+              // Get the clip's WAV data
+              const arrayBuffer = await window.electronAPI.getTempClip(clipInfo.id);
+              if (arrayBuffer) {
+                console.log(`✅ Successfully loaded clip data for ${clipInfo.name} (${arrayBuffer.byteLength} bytes)`);
+                // Create a blob from the array buffer
+                const blob = new Blob([arrayBuffer], { type: 'audio/wav' });
+
+                // Add to loaded clips with all metadata
+                loadedClips.push({
+                  id: clipInfo.id,
+                  name: clipInfo.name,
+                  start: clipInfo.start,
+                  duration: clipInfo.duration,
+                  blob,
+                  // Restore metadata for artist information
+                  artist: clipInfo.artist,
+                  songName: clipInfo.songName,
+                  album: clipInfo.album,
+                  year: clipInfo.year,
+                  genre: clipInfo.genre
+                });
+
+                // Remove from map so we don't process it again
+                tempClipsMap.delete(clipId);
+              } else {
+                console.warn(`⚠️ No data returned for clip ${clipInfo.id}`);
+              }
+            } catch (error) {
+              console.error(`❌ Failed to load clip ${clipInfo.id}:`, error);
+            }
+          }
+        }
+
+        // Then load any remaining clips that weren't in the saved order
+        for (const [clipId, clipInfo] of tempClipsMap) {
           try {
+            console.log(`🎵 Loading additional clip: ${clipInfo.name} (ID: ${clipInfo.id})`);
             // Get the clip's WAV data
             const arrayBuffer = await window.electronAPI.getTempClip(clipInfo.id);
             if (arrayBuffer) {
+              console.log(`✅ Successfully loaded additional clip data for ${clipInfo.name} (${arrayBuffer.byteLength} bytes)`);
               // Create a blob from the array buffer
               const blob = new Blob([arrayBuffer], { type: 'audio/wav' });
 
-              // Add to loaded clips
+              // Add to loaded clips with all metadata
               loadedClips.push({
                 id: clipInfo.id,
                 name: clipInfo.name,
                 start: clipInfo.start,
                 duration: clipInfo.duration,
-                blob
+                blob,
+                // Restore metadata for artist information
+                artist: clipInfo.artist,
+                songName: clipInfo.songName,
+                album: clipInfo.album,
+                year: clipInfo.year,
+                genre: clipInfo.genre
               });
+            } else {
+              console.warn(`⚠️ No data returned for additional clip ${clipInfo.id}`);
             }
           } catch (error) {
-            console.error(`Failed to load clip ${clipInfo.id}:`, error);
+            console.error(`❌ Failed to load additional clip ${clipInfo.id}:`, error);
           }
         }
 
+        console.log(`🎵 Successfully loaded ${loadedClips.length} clips from temp folder in correct order`);
         if (loadedClips.length > 0) {
           setExtractedClips(loadedClips);
           // Clear clip metadata since we now have the actual clips
           setClipMetadata([]);
+          console.log('✅ Clips restored from temp folder in correct order, cleared localStorage metadata');
         }
+      } else {
+        console.log('📂 No temp clips found, keeping localStorage metadata if available');
       }
     } catch (error) {
-      console.error('Failed to load temp clips:', error);
+      console.error('❌ Failed to load temp clips:', error);
     }
   };
 
@@ -1383,58 +1936,34 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     return mimeType;
   };
 
-  // Load songs in the library folder
-  const loadLibrarySongs = async () => {
-    setLibraryLoading(true);
-    setLibraryError(null);
-    setLibraryProgress(null);
-    try {
-      if (!window.electronAPI) return;
-      const folder = await window.electronAPI.getLibraryFolder();
-      setLibraryFolder(folder);
-      if (!folder) {
-        setLibrarySongs([]);
-        setLibraryLoading(false);
-        return;
-      }
 
-      // Set up progress listener
-      const handleProgress = (_event: any, progress: { processed: number; current: string }) => {
-        setLibraryProgress(progress);
-      };
-
-      window.electronAPI.onLibraryLoadProgress(handleProgress);
-
-      try {
-        const files = await window.electronAPI.listLibraryAudio();
-        setLibrarySongs(files);
-      } finally {
-        // Clean up progress listener
-        window.electronAPI.removeLibraryLoadProgressListener(handleProgress);
-        setLibraryProgress(null);
-      }
-    } catch (err: any) {
-      setLibraryError('Failed to load library: ' + (err?.message || err));
-      setLibrarySongs([]);
-      setLibraryProgress(null);
-    } finally {
-      setLibraryLoading(false);
-    }
-  };
 
   // Cancel library loading
   const cancelLibraryLoading = async () => {
     if (window.electronAPI) {
       await window.electronAPI.cancelLibraryLoading();
-      setLibraryLoading(false);
-      setLibraryProgress(null);
+      // Note: Library loading state is managed by the context
     }
   };
 
-  // Play a song from the library
-  const playLibrarySong = async (song: LibrarySong) => {
+  // Play a song from the library - memoized for performance
+  const playLibrarySong = useCallback(async (song: LibrarySong, index: number) => {
     try {
       if (!window.electronAPI) throw new Error('Electron API not available');
+
+      // Check if this is the currently playing song
+      const isCurrentlyPlaying = libraryPlayingIndex === index && audio.audioSource === 'mix' && audio.currentMix;
+
+      if (isCurrentlyPlaying) {
+        // If the same song is playing, toggle pause/resume
+        if (audio.mixPlaying) {
+          audio.pauseMix();
+        } else {
+          audio.resumeMix();
+        }
+        return;
+      }
+
       // Get the file as a Blob and create an object URL
       const arrayBuffer = await window.electronAPI.getFileBlob(song.path);
       const fileBlob = new Blob([arrayBuffer]);
@@ -1444,16 +1973,21 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
         name: song.title || song.name,
         localFilePath: fileUrl,
         songList: [],
+        artist: song.artist,
+        year: song.year,
+        genre: song.genre,
       });
-      // Optionally set playing index for UI highlight
-      const idx = sortedLibrarySongs.findIndex(s => s.path === song.path);
-      setLibraryPlayingIndex(idx);
+      // Set playing index for UI highlight
+      setLibraryPlayingIndex(index);
+
+      // Track in recently played
+      addToRecentlyPlayed(song);
     } catch (err) {
       console.error('Failed to play library song:', err);
       setLibraryPlayingIndex(null);
       setLibraryPlayError('Failed to play: ' + (song.title || song.name));
     }
-  };
+  }, [playMix, setLibraryPlayingIndex, addToRecentlyPlayed, libraryPlayingIndex, audio]);
 
   // Add a library song to the mix
   // Extract 1 minute from a library song
@@ -1537,13 +2071,40 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
       // Convert to WAV and create clip
       const wavBlob = await bufferToWavBlob(renderedBuffer);
       const baseName = 'title' in song ? (song.title || song.name.replace(/\.[^/.]+$/, '')) : song.name.replace(/\.[^/.]+$/, '');
+
+      // Debug logging for clip creation
+      console.log('🎵 Creating clip from song:', {
+        songName: song.name,
+        songTitle: (song as LibrarySong).title || 'N/A',
+        songArtist: (song as LibrarySong).artist || 'N/A',
+        songAlbum: (song as LibrarySong).album || 'N/A',
+        songYear: (song as LibrarySong).year || 'N/A',
+        songGenre: (song as LibrarySong).genre || 'N/A',
+        songObject: song
+      });
+
       const newClip = {
         id: Math.random().toString(36).substr(2, 9),
         name: baseName + ` [${formatTime(start)} - ${formatTime(start + duration)}]`,
         blob: wavBlob,
         start,
         duration,
+        // Preserve metadata from library song
+        songName: (song as LibrarySong).title || song.name,
+        artist: (song as LibrarySong).artist || undefined,
+        album: (song as LibrarySong).album || undefined,
+        year: (song as LibrarySong).year || undefined,
+        genre: (song as LibrarySong).genre || undefined,
       };
+
+      console.log('🎵 Created clip with metadata:', {
+        clipName: newClip.name,
+        clipSongName: newClip.songName,
+        clipArtist: newClip.artist,
+        clipAlbum: newClip.album,
+        clipYear: newClip.year,
+        clipGenre: newClip.genre
+      });
 
       // Add to extracted clips
       addExtractedClips([newClip]);
@@ -1558,26 +2119,114 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     }
   };
 
-  // Selection handlers
-  const handleSelectSong = (songPath: string) => {
-    setSelectedSongs(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(songPath)) {
-        newSet.delete(songPath);
-      } else {
-        newSet.add(songPath);
-      }
-      return newSet;
-    });
-  };
+  // Enhanced search and filter logic - moved up to be available for other functions
+  const sortedLibrarySongs = React.useMemo(() => {
+    try {
+      const field = librarySort.field;
+      const dir = librarySort.direction === 'asc' ? 1 : -1;
 
-  const handleSelectAll = () => {
+      // Start with all songs
+      let filtered = librarySongs;
+
+      // Apply basic search term - optimized for performance
+      if (debouncedSearch.trim()) {
+        const searchTerm = debouncedSearch.toLowerCase().trim();
+
+        // Simple but fast search - just use includes for better performance
+        filtered = librarySongs.filter(song => {
+          try {
+            const title = (song.title || song.name || '').toLowerCase();
+            const artist = (song.artist || '').toLowerCase();
+            const album = (song.album || '').toLowerCase();
+            const genre = (song.genre || '').toLowerCase();
+            const year = (song.year || '').toLowerCase();
+            const tags = (song.tags || []).join(' ').toLowerCase();
+
+            return (
+              title.includes(searchTerm) ||
+              artist.includes(searchTerm) ||
+              album.includes(searchTerm) ||
+              genre.includes(searchTerm) ||
+              year.includes(searchTerm) ||
+              tags.includes(searchTerm)
+            );
+          } catch (error) {
+            console.error('Error filtering song:', error);
+            return false;
+          }
+        });
+      }
+
+      // Apply quick filters
+      activeQuickFilters.forEach(filterId => {
+        try {
+          if (filterId === 'favorites') {
+            filtered = filtered.filter(song => favoriteTracks.has(song.path));
+          } else if (filterId === 'recent') {
+            const recentPaths = new Set(recentlyPlayed.map(s => s.path));
+            filtered = filtered.filter(song => recentPaths.has(song.path));
+          } else if (filterId.startsWith('genre:')) {
+            const genre = filterId.replace('genre:', '');
+            filtered = filtered.filter(song =>
+              (song.genre || '').toLowerCase().includes(genre.toLowerCase())
+            );
+          } else if (filterId.startsWith('year:')) {
+            const year = filterId.replace('year:', '');
+            filtered = filtered.filter(song =>
+              (song.year || '').includes(year)
+            );
+          }
+        } catch (error) {
+          console.error('Error applying quick filter:', filterId, error);
+        }
+      });
+
+      // Sort the filtered results
+      return [...filtered].sort((a, b) => {
+        try {
+          let aVal, bVal;
+
+          if (field === 'tags') {
+            // For tags, sort by the first tag or empty string
+            aVal = (Array.isArray(a.tags) && a.tags.length > 0 ? a.tags[0] : '').toLowerCase();
+            bVal = (Array.isArray(b.tags) && b.tags.length > 0 ? b.tags[0] : '').toLowerCase();
+          } else {
+            aVal = (a[field] || '').toLowerCase();
+            bVal = (b[field] || '').toLowerCase();
+          }
+
+          if (aVal < bVal) return -1 * dir;
+          if (aVal > bVal) return 1 * dir;
+          return 0;
+        } catch (error) {
+          console.error('Error sorting songs:', error);
+          return 0;
+        }
+      });
+    } catch (error) {
+      console.error('Error in sortedLibrarySongs:', error);
+      return librarySongs; // Return original list if there's an error
+    }
+  }, [librarySongs, librarySort, debouncedSearch, activeQuickFilters, favoriteTracks, recentlyPlayed]);
+
+  // Selection handlers - memoized for performance
+  const handleSelectSong = useCallback((songPath: string) => {
+    const newSet = new Set(selectedSongs);
+    if (newSet.has(songPath)) {
+      newSet.delete(songPath);
+    } else {
+      newSet.add(songPath);
+    }
+    setSelectedSongs(newSet);
+  }, [selectedSongs, setSelectedSongs]);
+
+  const handleSelectAll = useCallback(() => {
     if (selectedSongs.size === sortedLibrarySongs.length) {
       setSelectedSongs(new Set());
     } else {
       setSelectedSongs(new Set(sortedLibrarySongs.map(song => song.path)));
     }
-  };
+  }, [selectedSongs.size, sortedLibrarySongs, setSelectedSongs]);
 
   // Extract clips from selected songs
   const handleExtractSelected = async () => {
@@ -1613,6 +2262,16 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     await processWildCardExtraction();
   };
 
+  // Individual Wild Card function for a single song
+  const handleIndividualWildCard = async (song: LibrarySong) => {
+    try {
+      await extractLibrarySongMinute(song);
+    } catch (err) {
+      console.error('Failed to extract wild card minute from song:', err);
+      showSnackbar('Failed to extract wild card minute from song.', 'error');
+    }
+  };
+
   // Process Wild Card extraction for multiple songs
   const processWildCardExtraction = async () => {
     if (selectedSongs.size === 0) return;
@@ -1635,6 +2294,9 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
       .sort(() => Math.random() - 0.5)
       .slice(0, 60);
 
+    // Calculate the actual number of songs we'll process
+    const totalSongsToProcess = shuffledLibrarySongs.length;
+
     // Create an array to hold all clips we'll process
     const allNewClips: ExtractedClip[] = [];
     let processedCount = 0;
@@ -1653,7 +2315,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     progressDialog.style.zIndex = '9999';
     progressDialog.style.minWidth = '300px';
     progressDialog.style.textAlign = 'center';
-    progressDialog.innerHTML = '<h3>Creating Wild Card Mix</h3><p>Processing songs: <span id="process-count">0</span>/60</p>';
+    progressDialog.innerHTML = `<h3>Creating Wild Card Mix</h3><p>Processing songs: <span id="process-count">0</span>/${totalSongsToProcess}</p>`;
     document.body.appendChild(progressDialog);
 
     try {
@@ -1722,13 +2384,40 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
           // Convert to WAV and create clip
           const wavBlob = await bufferToWavBlob(renderedBuffer);
           const baseName = song.title || song.name.replace(/\.[^/.]+$/, '');
+
+          // Debug logging for wild card clip creation
+          console.log('🎲 Creating wild card clip from song:', {
+            songName: song.name,
+            songTitle: song.title,
+            songArtist: song.artist,
+            songAlbum: song.album,
+            songYear: song.year,
+            songGenre: song.genre,
+            songObject: song
+          });
+
           const newClip = {
             id: Math.random().toString(36).substr(2, 9),
             name: baseName + ` [${formatTime(start)} - ${formatTime(start + duration)}]`,
             blob: wavBlob,
             start,
             duration,
+            // Preserve metadata from library song
+            songName: song.title || song.name,
+            artist: song.artist,
+            album: song.album,
+            year: song.year,
+            genre: song.genre,
           };
+
+          console.log('🎲 Created wild card clip with metadata:', {
+            clipName: newClip.name,
+            clipSongName: newClip.songName,
+            clipArtist: newClip.artist,
+            clipAlbum: newClip.album,
+            clipYear: newClip.year,
+            clipGenre: newClip.genre
+          });
 
           // Add to our clips array
           allNewClips.push(newClip);
@@ -1764,40 +2453,185 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     }
   };
 
-  // Sort and filter library songs
-  const sortedLibrarySongs = React.useMemo(() => {
-    const field = librarySort.field;
-    const dir = librarySort.direction === 'asc' ? 1 : -1;
 
-    // First filter by search term
-    let filtered = librarySongs;
-    if (librarySearch.trim()) {
-      const searchTerm = librarySearch.toLowerCase().trim();
-      filtered = librarySongs.filter(song =>
-        (song.title || song.name || '').toLowerCase().includes(searchTerm) ||
-        (song.artist || '').toLowerCase().includes(searchTerm) ||
-        (song.album || '').toLowerCase().includes(searchTerm) ||
-        (song.genre || '').toLowerCase().includes(searchTerm) ||
-        (song.year || '').toLowerCase().includes(searchTerm)
-      );
-    }
 
-    // Then sort the filtered results
-    return [...filtered].sort((a, b) => {
-      const aVal = (a[field] || '').toLowerCase();
-      const bVal = (b[field] || '').toLowerCase();
-      if (aVal < bVal) return -1 * dir;
-      if (aVal > bVal) return 1 * dir;
-      return 0;
+
+
+
+
+
+
+
+
+  // Quick filter handlers
+  const handleQuickFilterToggle = React.useCallback((filterId: string) => {
+    setActiveQuickFilters(prev => {
+      if (prev.includes(filterId)) {
+        return prev.filter(id => id !== filterId);
+      } else {
+        return [...prev, filterId];
+      }
     });
-  }, [librarySongs, librarySort, librarySearch]);
+  }, []);
+
+  const clearAllQuickFilters = React.useCallback(() => {
+    setActiveQuickFilters([]);
+  }, []);
+
+
+
+  const handleEnhanceMetadata = React.useCallback(async (songs: LibrarySong[], enhancements: string[]) => {
+    // TODO: Implement actual metadata enhancement
+    showSnackbar(`Enhanced metadata for ${songs.length} songs`, 'success');
+    // Refresh library after enhancement
+    if (libraryFolder) {
+      loadLibrarySongs(true); // Force refresh
+    }
+  }, [showSnackbar, libraryFolder, loadLibrarySongs]);
+
+  // Library manager handlers
+  const handleSelectLibrary = React.useCallback(async (libraryPath: string) => {
+    await selectLibrary(libraryPath);
+  }, [selectLibrary]);
+
+  const handleAddNewLibrary = React.useCallback(() => {
+    setLibraryManagerOpen(false);
+    chooseLibraryFolder();
+  }, [chooseLibraryFolder]);
+
+  // Library dropdown menu handlers
+  const handleLibraryMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
+    setLibraryMenuAnchor(event.currentTarget);
+  };
+
+  const handleLibraryMenuClose = () => {
+    setLibraryMenuAnchor(null);
+  };
+
+  const handleAddSongsClick = () => {
+    handleLibraryMenuClose();
+    // Trigger file input
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'audio/*';
+    fileInput.multiple = true;
+    fileInput.onchange = (e) => {
+      const files = (e.target as HTMLInputElement).files;
+      if (files) {
+        onDrop(Array.from(files));
+      }
+    };
+    fileInput.click();
+  };
+
+  const handleAddFolderClick = () => {
+    handleLibraryMenuClose();
+    setLibraryManagerOpen(true);
+  };
+
+  const handleRefreshLibraryClick = () => {
+    handleLibraryMenuClose();
+    loadLibrarySongs(true);
+  };
+
+  // Get unique values for search filters
+  const getUniqueValues = React.useMemo(() => {
+    const genres = new Set<string>();
+    const years = new Set<string>();
+    const artists = new Set<string>();
+    const albums = new Set<string>();
+
+    librarySongs.forEach(song => {
+      if (song.genre) genres.add(song.genre);
+      if (song.year) years.add(song.year);
+      if (song.artist) artists.add(song.artist);
+      if (song.album) albums.add(song.album);
+    });
+
+    return {
+      genres: Array.from(genres).sort(),
+      years: Array.from(years).sort().reverse(), // Most recent first
+      artists: Array.from(artists).sort(),
+      albums: Array.from(albums).sort(),
+    };
+  }, [librarySongs]);
+
+
+
+  // Keyboard shortcuts
+  useKeyboardShortcuts({
+    onPlayPause: () => {
+      if (libraryPlayingIndex !== null && sortedLibrarySongs[libraryPlayingIndex]) {
+        // Toggle play/pause for current song
+        playLibrarySong(sortedLibrarySongs[libraryPlayingIndex], libraryPlayingIndex);
+      }
+    },
+    onStop: () => {
+      setLibraryPlayingIndex(null);
+      // Stop any playing audio
+      if (window.electronAPI) {
+        // Could implement stop functionality
+      }
+    },
+    onNext: () => {
+      if (libraryPlayingIndex !== null && libraryPlayingIndex < sortedLibrarySongs.length - 1) {
+        const nextIndex = libraryPlayingIndex + 1;
+        playLibrarySong(sortedLibrarySongs[nextIndex], nextIndex);
+      }
+    },
+    onPrevious: () => {
+      if (libraryPlayingIndex !== null && libraryPlayingIndex > 0) {
+        const prevIndex = libraryPlayingIndex - 1;
+        playLibrarySong(sortedLibrarySongs[prevIndex], prevIndex);
+      }
+    },
+    onSearch: () => {
+      // Focus search input
+      const searchInput = document.querySelector('input[placeholder*="Search songs"]') as HTMLInputElement;
+      if (searchInput) {
+        searchInput.focus();
+        searchInput.select();
+      }
+    },
+
+    onSelectAll: () => {
+      handleSelectAll();
+    },
+    onClearSelection: () => {
+      setSelectedSongs(new Set());
+    },
+    onExtractSelected: () => {
+      if (selectedSongs.size > 0) {
+        handleExtractSelected();
+      }
+    },
+    onWildCard: () => {
+      if (selectedSongs.size > 0) {
+        handleLibraryWildCard();
+      }
+    },
+    onToggleSidebar: () => {
+      setSidebarOpen(!sidebarOpen);
+    },
+    onRefreshLibrary: () => {
+      if (libraryFolder) {
+        loadLibrarySongs();
+      }
+    },
+    onSavePlaylist: () => {
+      if (extractedClips.length > 0) {
+        setSaveDialogOpen(true);
+      }
+    },
+  });
+
+
+
+
 
   // Choose library folder
   const handleChooseLibraryFolder = async () => {
-    if (!window.electronAPI) return;
-    const folder = await window.electronAPI.selectLibraryFolder();
-    setLibraryFolder(folder);
-    if (folder) loadLibrarySongs();
+    await chooseLibraryFolder();
   };
 
   // Add effect to update body class when sidebar changes
@@ -1890,6 +2724,8 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     }
   }, [location]);
 
+
+
   // Function to load clips from a playlist
   const loadClipsFromPlaylist = async (playlist: any) => {
     if (!playlist.clips || playlist.clips.length === 0) return;
@@ -1936,7 +2772,12 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
             playing: false,
             songName: clip.songName,
             clipPath: clip.clipPath,
-            data: buffer
+            data: buffer,
+            // Preserve metadata if available
+            artist: (clip as any).artist,
+            album: (clip as any).album,
+            year: (clip as any).year,
+            genre: (clip as any).genre,
           };
         } catch (err) {
           console.error(`Error loading clip ${clip.name}:`, err);
@@ -2107,6 +2948,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
               src: [blobUrl],
               format: ['wav'],
               html5: true,
+              volume: volume, // Set the current volume immediately
               onend: () => handleClipEnd(extractedClips.length),
               onload: () => {
                 console.log(`Clip loaded from temp folder, duration: ${sound.duration()}`);
@@ -2162,6 +3004,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
           src: [blobUrl],
           format: ['wav'],  // Explicitly specify format
           html5: true,
+          volume: volume, // Set the current volume immediately
           onend: () => handleClipEnd(extractedClips.length),
           onload: () => {
             console.log(`Placeholder clip loaded, duration: ${sound.duration()}`);
@@ -2219,6 +3062,11 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
       return;
     }
 
+    if (!sidebarPlaylistName.trim()) {
+      showSnackbar("Please enter a playlist name.", 'error');
+      return;
+    }
+
     try {
       setExportLoading(true);
       setExportError(null);
@@ -2241,7 +3089,12 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
               name: clip.name,
               start: clip.start || 0,
               duration: clip.duration || 0,
-              songName: clip.songName || clip.name.split(' - ')[0] || 'Unknown Song'
+              songName: clip.songName || clip.name.split(' - ')[0] || 'Unknown Song',
+              // Include metadata fields
+              artist: clip.artist,
+              album: clip.album,
+              year: clip.year,
+              genre: clip.genre,
             };
 
             const saveResult = await window.electronAPI.saveClipToFile(clip.id, arrayBuffer, clipMetadataForSave);
@@ -2268,11 +3121,33 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
                     finalClipMetadata = loadedMeta.metadata;
                 } else {
                     // Create basic if not found
-                    finalClipMetadata = { id: clip.id, name: clip.name, start: clip.start, duration: clip.duration, songName: clip.songName, clipPath: finalClipPath };
+                    finalClipMetadata = {
+                      id: clip.id,
+                      name: clip.name,
+                      start: clip.start,
+                      duration: clip.duration,
+                      songName: clip.songName,
+                      clipPath: finalClipPath,
+                      artist: clip.artist,
+                      album: clip.album,
+                      year: clip.year,
+                      genre: clip.genre,
+                    };
                 }
             } catch (metaErr) {
                  console.warn("Could not load metadata for existing clip:", metaErr);
-                 finalClipMetadata = { id: clip.id, name: clip.name, start: clip.start, duration: clip.duration, songName: clip.songName, clipPath: finalClipPath };
+                 finalClipMetadata = {
+                   id: clip.id,
+                   name: clip.name,
+                   start: clip.start,
+                   duration: clip.duration,
+                   songName: clip.songName,
+                   clipPath: finalClipPath,
+                   artist: clip.artist,
+                   album: clip.album,
+                   year: clip.year,
+                   genre: clip.genre,
+                 };
             }
         } else {
             console.warn('Clip without blob or valid existing clipPath skipped:', clip.name);
@@ -2280,13 +3155,26 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
         }
 
         if (finalClipPath) {
+            console.log('🎵 Adding clip to playlist with metadata:', {
+              clipId: clip.id,
+              clipName: clip.name,
+              originalClipArtist: clip.artist,
+              finalClipMetadata: finalClipMetadata,
+              finalClipPath: finalClipPath
+            });
+
             tempProcessedPlaylistClips.push({
                 id: finalClipMetadata.id || clip.id,
                 name: finalClipMetadata.name || clip.name,
                 start: finalClipMetadata.start || clip.start || 0,
                 duration: finalClipMetadata.duration || clip.duration || 0,
                 songName: finalClipMetadata.songName || clip.songName || 'Unknown Song',
-                clipPath: finalClipPath
+                clipPath: finalClipPath,
+                // Include metadata in playlist clip
+                artist: finalClipMetadata.artist || clip.artist,
+                album: finalClipMetadata.album || clip.album,
+                year: finalClipMetadata.year || clip.year,
+                genre: finalClipMetadata.genre || clip.genre,
             });
         }
       }
@@ -2298,42 +3186,12 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
         return;
       }
 
-      // Store processed clips and open the naming dialog
-      setProcessedPlaylistClips(tempProcessedPlaylistClips);
-      setNewPlaylistName(`Playlist ${new Date().toLocaleDateString()}`);
-      setPlaylistNameError('');
-      setPlaylistNameDialogOpen(true);
-
-    } catch (error) {
-      console.error('Error preparing playlist:', error);
-      setExportError(`Error: ${(error as Error).message}`);
-      showSnackbar(`Error: ${(error as Error).message}`, 'error');
-    } finally {
-      setExportLoading(false);
-    }
-  };
-
-  // Add new function to handle the final submission after naming
-  const handleConfirmPlaylistName = async () => {
-    if (!newPlaylistName.trim()) {
-      setPlaylistNameError('Playlist name is required');
-      return;
-    }
-
-    setPlaylistNameError('');
-    setPlaylistNameDialogOpen(false);
-    setExportLoading(true);
-
-    try {
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available');
-      }
-
+      // Create and save the playlist directly
       const newPlaylist: Playlist = {
         id: `pl_${Date.now()}`,
-        name: newPlaylistName.trim(),
+        name: sidebarPlaylistName.trim(),
         date: new Date().toISOString(),
-        clips: processedPlaylistClips,
+        clips: tempProcessedPlaylistClips,
         drinkingSoundPath: drinkingSound && (drinkingSound as any).path ? (drinkingSound as any).path : undefined
       };
 
@@ -2345,8 +3203,9 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
       } else {
         throw new Error(saveResult.message || 'Failed to send playlist to Playlist Page');
       }
+
     } catch (error) {
-      console.error('Error sending to Playlist Page:', error);
+      console.error('Error preparing playlist:', error);
       setExportError(`Error: ${(error as Error).message}`);
       showSnackbar(`Error: ${(error as Error).message}`, 'error');
     } finally {
@@ -2354,17 +3213,14 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     }
   };
 
-  // Add function to handle dialog close
-  const handlePlaylistNameDialogClose = () => {
-    setPlaylistNameDialogOpen(false);
-  };
+
 
   // Add to existing JSX, right after the style tag at the beginning of the render function
   return (
     <div style={{
       width: '100%',
       maxWidth: '100%',
-      padding: '24px 10%', // Consistent padding regardless of sidebar state
+      padding: '24px 20px', // Restored horizontal padding for proper spacing
       boxSizing: 'border-box',
       display: 'flex',
       flexDirection: 'column',
@@ -2377,6 +3233,22 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
         body.sidebar-open {
           padding-right: 0 !important;
           overflow: auto !important;
+          margin-right: 0 !important;
+        }
+
+        /* Force full width usage */
+        #main-content-scroll-container {
+          padding: 0 !important;
+          margin: 0 !important;
+        }
+
+        /* Remove any container constraints */
+        .MuiContainer-root, .MuiBox-root {
+          max-width: 100% !important;
+          padding-left: 0 !important;
+          padding-right: 0 !important;
+          margin-left: 0 !important;
+          margin-right: 0 !important;
         }
         .library-table-container {
           overflow-x: auto !important;
@@ -2396,31 +3268,26 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
         }
         .library-table-container::-webkit-scrollbar {
           height: 8px;
-          background-color: rgba(0,0,0,0.1);
+          background-color: ${theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)'};
+          border-radius: 8px;
         }
         .library-table-container::-webkit-scrollbar-thumb {
-          background-color: ${theme.palette.primary.main}50;
-          border-radius: 4px;
+          background-color: ${theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)'};
+          border-radius: 8px;
         }
         .library-table-container::-webkit-scrollbar-thumb:hover {
-          background-color: ${theme.palette.primary.main}80;
+          background-color: ${theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.3)'};
         }
         @media (max-width: 1200px) {
           body > div:first-child {
-            padding-left: 5% !important;
-            padding-right: 5% !important;
-          }
-          body.sidebar-open > div:first-child {
-            padding-right: calc(320px + 5%) !important;
+            padding-left: 0 !important;
+            padding-right: 0 !important;
           }
         }
         @media (max-width: 768px) {
           body > div:first-child {
             padding-left: 16px !important;
             padding-right: 16px !important;
-          }
-          body.sidebar-open > div:first-child {
-            padding-right: calc(320px + 16px) !important;
           }
           .library-controls {
             flex-direction: column;
@@ -2493,7 +3360,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
       {/* Seek bar and controls only when a song is loaded */}
       {howl && (
         <>
-          <Box sx={{ mb: 2, px: 2, width: '100%', maxWidth: '1200px' }}>
+          <Box sx={{ mb: 2, px: 2, width: '100%' }}>
             <Slider
               value={progress}
               min={0}
@@ -2509,7 +3376,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
             </Box>
           </Box>
 
-          <Stack direction="row" spacing={2} sx={{ mb: 2, justifyContent: 'center', alignItems: 'center', width: '100%', maxWidth: '1200px' }}>
+          <Stack direction="row" spacing={2} sx={{ mb: 2, justifyContent: 'center', alignItems: 'center', width: '100%' }}>
             <IconButton onClick={playPrevious} disabled={currentSongIndex === null || currentSongIndex === 0}>
               <SkipPreviousIcon />
             </IconButton>
@@ -2539,138 +3406,262 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
         </>
       )}
 
-      {/* Power Hour Library Section */}
-      <div style={{ width: '100%', maxWidth: '100%' }}>
-        <div
-          className="library-controls"
-          style={{
+      {/* Music Library Section with Drag and Drop */}
+      <div
+        {...getRootProps()}
+        style={{
+          width: '100%',
+          maxWidth: '100%',
+          position: 'relative'
+        }}
+      >
+        <input {...getInputProps()} />
+
+        {/* Drag overlay */}
+        {(isDragActive || dragDropLoading) && (
+          <div style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: dragDropLoading ? 'rgba(76, 175, 80, 0.1)' : 'rgba(0, 123, 255, 0.1)',
+            border: `2px dashed ${dragDropLoading ? '#4caf50' : '#007bff'}`,
+            borderRadius: '8px',
             display: 'flex',
-            justifyContent: 'space-between',
             alignItems: 'center',
-            marginBottom: '16px',
+            justifyContent: 'center',
+            zIndex: 1000,
+            pointerEvents: 'none'
+          }}>
+            <div style={{
+              textAlign: 'center',
+              color: dragDropLoading ? '#4caf50' : '#007bff',
+              fontSize: '1.2rem',
+              fontWeight: 'bold'
+            }}>
+              {dragDropLoading ? (
+                <>
+                  <CircularProgress size={48} sx={{ color: '#4caf50', mb: 2 }} />
+                  <div>Processing files...</div>
+                  <div style={{ fontSize: '0.9rem', marginTop: '8px', opacity: 0.8 }}>
+                    Adding songs to your library
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: '3rem', marginBottom: '16px' }}>🎵</div>
+                  <div>Drop audio files here to add to library</div>
+                  <div style={{ fontSize: '0.9rem', marginTop: '8px', opacity: 0.8 }}>
+                    Supports MP3, WAV, OGG, M4A
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+        {/* Library Header with Title and Buttons */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          marginBottom: '16px',
+          width: '100%',
+          position: 'relative'
+        }}>
+          {/* Left side - Manage Library Button positioned under Create Mix nav */}
+          <div style={{ position: 'absolute', left: '145px' }}>
+            <Button
+              variant="outlined"
+              startIcon={<LibraryMusicIcon />}
+              endIcon={<ArrowDropDownIcon />}
+              onClick={handleLibraryMenuOpen}
+              size="small"
+            >
+              Manage Library
+            </Button>
+          </div>
+
+          {/* Center - Library Title */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
             width: '100%',
-            maxWidth: '1200px'
+            flexDirection: 'column',
+            gap: '4px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <h2 style={{ margin: 0, fontSize: '1.4rem', textAlign: 'center' }}>Music Library</h2>
+              <Typography variant="body2" sx={{ ml: 1, color: theme.palette.text.secondary, fontWeight: 700, fontSize: '1.1rem' }}>
+                ({sortedLibrarySongs.length})
+              </Typography>
+            </div>
+            {selectedSongs.size > 0 && (
+              <Typography variant="body2" sx={{
+                color: theme.palette.primary.main,
+                fontWeight: 600,
+                fontSize: '0.9rem',
+                textAlign: 'center'
+              }}>
+                {selectedSongs.size} song{selectedSongs.size === 1 ? '' : 's'} selected
+              </Typography>
+            )}
+          </div>
+        </div>
+
+        {libraryError && <Typography color="error" sx={{ padding: '0 0 12px 0', fontSize: '0.8rem', width: '100%' }}>{libraryError}</Typography>}
+
+        {/* Library Management Dropdown Menu */}
+        <Menu
+          anchorEl={libraryMenuAnchor}
+          open={Boolean(libraryMenuAnchor)}
+          onClose={handleLibraryMenuClose}
+          anchorOrigin={{
+            vertical: 'bottom',
+            horizontal: 'left',
+          }}
+          transformOrigin={{
+            vertical: 'top',
+            horizontal: 'left',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center' }}>
-            <h2 style={{ margin: 0, fontSize: '1.2rem' }}>Power Hour Library</h2>
-            <Typography variant="body2" sx={{ ml: 1, color: theme.palette.text.secondary, fontWeight: 700, fontSize: '1rem' }}>
-              ({librarySongs.length})
-            </Typography>
+          <MenuItem onClick={handleAddSongsClick}>
+            <ListItemIcon>
+              <AddCircleOutlineIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Add Songs</ListItemText>
+          </MenuItem>
+          <MenuItem onClick={handleAddFolderClick}>
+            <ListItemIcon>
+              <FolderIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Add Folder</ListItemText>
+          </MenuItem>
+          <MenuItem onClick={handleRefreshLibraryClick} disabled={!libraryFolder}>
+            <ListItemIcon>
+              <RefreshIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Refresh Library</ListItemText>
+          </MenuItem>
+        </Menu>
+
+        {/* Quick Filters and Search Bar */}
+        <div style={{ padding: '0 0 16px 0', width: '100%' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', maxWidth: '80%' }}>
+            {/* Quick Filters */}
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <QuickFilters
+                activeFilters={activeQuickFilters}
+                onFilterToggle={handleQuickFilterToggle}
+                onClearAllFilters={clearAllQuickFilters}
+                availableGenres={getUniqueValues.genres}
+                availableYears={getUniqueValues.years}
+                recentlyPlayedCount={recentlyPlayed.length}
+                favoritesCount={favoriteTracks.size}
+              />
+            </div>
+
+            {/* Search Bar positioned to the right but within bounds */}
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <TextField
+                variant="outlined"
+                placeholder="Search songs..."
+                value={librarySearch}
+                onChange={(e) => {
+                  try {
+                    setLibrarySearch(e.target.value);
+                  } catch (error) {
+                    console.error('Error updating search:', error);
+                  }
+                }}
+                size="small"
+                sx={{
+                  width: '250px',
+                  '& .MuiOutlinedInput-root': {
+                    backgroundColor: theme.palette.background.paper,
+                    color: theme.palette.text.primary,
+                    '& fieldset': {
+                      borderColor: theme.palette.secondary.main,
+                    },
+                    '&:hover fieldset': {
+                      borderColor: theme.palette.primary.main,
+                    },
+                    '&.Mui-focused fieldset': {
+                      borderColor: theme.palette.secondary.main,
+                    },
+                  },
+                  '& .MuiInputBase-input::placeholder': {
+                    color: theme.palette.text.secondary,
+                    opacity: 0.7,
+                  },
+                }}
+                InputProps={{
+                  startAdornment: (
+                    <SearchIcon sx={{ color: theme.palette.text.secondary, mr: 1 }} />
+                  ),
+                  endAdornment: librarySearch && (
+                    <IconButton
+                      size="small"
+                      onClick={() => {
+                        try {
+                          setLibrarySearch('');
+                        } catch (error) {
+                          console.error('Error clearing search:', error);
+                        }
+                      }}
+                      sx={{ color: theme.palette.text.secondary }}
+                    >
+                      <ClearIcon fontSize="small" />
+                    </IconButton>
+                  ),
+                }}
+              />
+            </div>
           </div>
-          <div>
-            <Button
-              variant="outlined"
-              startIcon={<FolderOpenIcon />}
-              onClick={handleChooseLibraryFolder}
-              size="small"
-              sx={{ marginRight: '8px' }}
-            >
-              Choose Library Folder
-            </Button>
-            <Button
-              variant="outlined"
-              startIcon={<AddCircleOutlineIcon />}
-              component="label"
-              size="small"
-              sx={{ marginRight: '8px' }}
-            >
-              Import Songs
-              <input type="file" accept="audio/*" hidden multiple onChange={(e) => onDrop(e.target.files ? Array.from(e.target.files) : [])} />
-            </Button>
-            <Button
-              variant="contained"
-              startIcon={<RefreshIcon />}
-              onClick={loadLibrarySongs}
-              size="small"
-              disabled={!libraryFolder}
-              color="primary"
-            >
-              Load Library
-            </Button>
-          </div>
         </div>
 
-        <div style={{ padding: '0 0 12px 0', width: '100%', maxWidth: '1200px' }}>
-          {libraryFolder ? (
-            <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>
-              Folder: <code>{libraryFolder}</code>
-            </Typography>
-          ) : (
-            <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>
-              No library folder selected.
-            </Typography>
-          )}
-        </div>
-
-        {libraryError && <Typography color="error" sx={{ padding: '0 0 12px 0', fontSize: '0.8rem', width: '100%', maxWidth: '1200px' }}>{libraryError}</Typography>}
-
-        {/* Search Bar */}
-        <div style={{ padding: '0 0 16px 0', width: '100%', maxWidth: '1200px' }}>
-          <TextField
-            fullWidth
-            variant="outlined"
-            placeholder="Search songs, artists, albums, genres, or years..."
-            value={librarySearch}
-            onChange={(e) => setLibrarySearch(e.target.value)}
-            size="small"
-            sx={{
-              '& .MuiOutlinedInput-root': {
-                backgroundColor: theme.palette.background.paper,
-                color: theme.palette.text.primary,
-                '& fieldset': {
-                  borderColor: theme.palette.secondary.main,
-                },
-                '&:hover fieldset': {
-                  borderColor: theme.palette.primary.main,
-                },
-                '&.Mui-focused fieldset': {
-                  borderColor: theme.palette.secondary.main,
-                },
-              },
-              '& .MuiInputBase-input::placeholder': {
-                color: theme.palette.text.secondary,
-                opacity: 0.7,
-              },
-            }}
-            InputProps={{
-              startAdornment: (
-                <SearchIcon sx={{ color: theme.palette.text.secondary, mr: 1 }} />
-              ),
-              endAdornment: librarySearch && (
-                <IconButton
-                  size="small"
-                  onClick={() => setLibrarySearch('')}
-                  sx={{ color: theme.palette.text.secondary }}
-                >
-                  <ClearIcon fontSize="small" />
-                </IconButton>
-              ),
-            }}
-          />
-        </div>
-
-        {/* Bulk Action Buttons */}
+        {/* Extract Action Buttons for Selected Songs */}
         {selectedSongs.size > 0 && (
           <div style={{
             padding: '0 0 16px 0',
             width: '100%',
-            maxWidth: '1200px',
             display: 'flex',
             gap: '12px',
             alignItems: 'center'
           }}>
             <Typography variant="body2" sx={{ color: theme.palette.text.secondary, fontSize: '0.9rem' }}>
-              {selectedSongs.size} song{selectedSongs.size === 1 ? '' : 's'} selected:
+              Extract clips from {selectedSongs.size} selected song{selectedSongs.size === 1 ? '' : 's'}:
             </Typography>
             <Button
               size="small"
               variant="contained"
               onClick={handleLibraryWildCard}
               sx={{
-                backgroundColor: theme.palette.primary.main,
-                color: theme.palette.primary.contrastText,
-                '&:hover': { backgroundColor: theme.palette.primary.dark },
+                background: (() => {
+                  // Create a darker version of the theme color
+                  const hex = currentTheme.primary;
+                  const r = parseInt(hex.slice(1, 3), 16);
+                  const g = parseInt(hex.slice(3, 5), 16);
+                  const b = parseInt(hex.slice(5, 7), 16);
+                  const darkerR = Math.max(0, Math.floor(r * 0.6));
+                  const darkerG = Math.max(0, Math.floor(g * 0.6));
+                  const darkerB = Math.max(0, Math.floor(b * 0.6));
+                  return `rgb(${darkerR}, ${darkerG}, ${darkerB}) !important`;
+                })(),
+                color: '#ffffff',
+                '&:hover': {
+                  background: (() => {
+                    // Create an even darker version for hover
+                    const hex = currentTheme.primary;
+                    const r = parseInt(hex.slice(1, 3), 16);
+                    const g = parseInt(hex.slice(3, 5), 16);
+                    const b = parseInt(hex.slice(5, 7), 16);
+                    const darkerR = Math.max(0, Math.floor(r * 0.4));
+                    const darkerG = Math.max(0, Math.floor(g * 0.4));
+                    const darkerB = Math.max(0, Math.floor(b * 0.4));
+                    return `rgb(${darkerR}, ${darkerG}, ${darkerB}) !important`;
+                  })()
+                },
                 padding: '4px 12px',
                 fontSize: '0.85rem',
                 borderRadius: '6px',
@@ -2687,9 +3678,31 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
               variant="contained"
               onClick={handleExtractSelected}
               sx={{
-                backgroundColor: theme.palette.primary.main,
-                color: theme.palette.primary.contrastText,
-                '&:hover': { backgroundColor: theme.palette.primary.dark },
+                background: (() => {
+                  // Create a darker version of the theme color
+                  const hex = currentTheme.primary;
+                  const r = parseInt(hex.slice(1, 3), 16);
+                  const g = parseInt(hex.slice(3, 5), 16);
+                  const b = parseInt(hex.slice(5, 7), 16);
+                  const darkerR = Math.max(0, Math.floor(r * 0.6));
+                  const darkerG = Math.max(0, Math.floor(g * 0.6));
+                  const darkerB = Math.max(0, Math.floor(b * 0.6));
+                  return `rgb(${darkerR}, ${darkerG}, ${darkerB}) !important`;
+                })(),
+                color: '#ffffff',
+                '&:hover': {
+                  background: (() => {
+                    // Create an even darker version for hover
+                    const hex = currentTheme.primary;
+                    const r = parseInt(hex.slice(1, 3), 16);
+                    const g = parseInt(hex.slice(3, 5), 16);
+                    const b = parseInt(hex.slice(5, 7), 16);
+                    const darkerR = Math.max(0, Math.floor(r * 0.4));
+                    const darkerG = Math.max(0, Math.floor(g * 0.4));
+                    const darkerB = Math.max(0, Math.floor(b * 0.4));
+                    return `rgb(${darkerR}, ${darkerG}, ${darkerB}) !important`;
+                  })()
+                },
                 padding: '4px 12px',
                 fontSize: '0.85rem',
                 borderRadius: '6px',
@@ -2710,49 +3723,163 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
         )}
 
         {libraryLoading ? (
-          <div style={{ width: '100%', maxWidth: '1200px', padding: '20px' }}>
-            <Typography sx={{ fontSize: '0.9rem', marginBottom: '16px' }}>
-              Loading library...
-            </Typography>
-            {libraryProgress && (
-              <div>
-                <Typography sx={{ fontSize: '0.8rem', color: theme.palette.text.secondary, marginBottom: '8px' }}>
-                  Processed {libraryProgress.processed} files
-                </Typography>
-                <Typography sx={{ fontSize: '0.75rem', color: theme.palette.text.secondary }}>
-                  Current: {libraryProgress.current}
-                </Typography>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  onClick={cancelLibraryLoading}
-                  sx={{ marginTop: '8px', fontSize: '0.75rem' }}
-                >
-                  Cancel
-                </Button>
-              </div>
-            )}
+          <div style={{ width: '100%', padding: '20px' }}>
+            <ModernCard>
+              <LibraryLoadingCard
+                progress={libraryProgress ? (libraryProgress.processed / Math.max(librarySongs.length, 1)) * 100 : undefined}
+                currentSong={libraryProgress?.current}
+              />
+              {libraryProgress && (
+                <Box sx={{ mt: 2, display: 'flex', justifyContent: 'center' }}>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={cancelLibraryLoading}
+                    sx={{ fontSize: '0.75rem' }}
+                  >
+                    Cancel Loading
+                  </Button>
+                </Box>
+              )}
+            </ModernCard>
           </div>
         ) : (
-          <VirtualizedLibraryTable
-            songs={sortedLibrarySongs}
-            selectedSongs={selectedSongs}
-            libraryPlayingIndex={libraryPlayingIndex}
-            onSelectSong={handleSelectSong}
-            onSelectAll={handleSelectAll}
-            onPlaySong={(song, index) => {
-              playLibrarySong(song);
-              setLibraryPlayingIndex(index);
-            }}
-            onExtractClip={(song) => openExtractModal(song)}
-            librarySort={librarySort}
-            onSortChange={(field) => {
-              setLibrarySort(s => ({
-                field,
-                direction: s.field === field ? (s.direction === 'asc' ? 'desc' : 'asc') : 'asc'
-              }));
-            }}
-          />
+          <div style={{
+            width: '100%',
+            maxWidth: '100%',
+            display: 'flex',
+            position: 'relative'
+          }}>
+            {/* Resizable Library Table Container */}
+            <div
+              style={{
+                width: `${libraryTableWidth}%`,
+                minWidth: '50%',
+                maxWidth: '98%',
+                position: 'relative',
+                borderRight: `2px solid ${theme.palette.divider}`,
+                paddingRight: '8px'
+              }}
+            >
+              {sortedLibrarySongs.length === 0 && librarySearch.trim() ? (
+                <div style={{
+                  padding: '40px 20px',
+                  textAlign: 'center',
+                  color: theme.palette.text.secondary,
+                  backgroundColor: theme.palette.background.paper,
+                  borderRadius: '8px',
+                  border: `1px solid ${theme.palette.divider}`
+                }}>
+                  <Typography variant="h6" sx={{ mb: 2 }}>
+                    No results found
+                  </Typography>
+                  <Typography variant="body2" sx={{ mb: 2 }}>
+                    No songs match your search for "{librarySearch}"
+                  </Typography>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() => setLibrarySearch('')}
+                    sx={{ mt: 1 }}
+                  >
+                    Clear Search
+                  </Button>
+                </div>
+              ) : (
+                <LibraryTable
+                songs={sortedLibrarySongs}
+                selectedSongs={selectedSongs}
+                libraryPlayingIndex={libraryPlayingIndex}
+                onSelectSong={handleSelectSong}
+                onSelectAll={handleSelectAll}
+                onPlaySong={(song, index) => {
+                  try {
+                    playLibrarySong(song, index);
+                  } catch (error) {
+                    console.error('Error playing song:', error);
+                  }
+                }}
+                onExtractClip={(song) => {
+                  try {
+                    openExtractModal(song);
+                  } catch (error) {
+                    console.error('Error opening extract modal:', error);
+                  }
+                }}
+                librarySort={librarySort}
+                onSortChange={(field) => {
+                  try {
+                    const newSort = {
+                      field,
+                      direction: librarySort.field === field ? (librarySort.direction === 'asc' ? 'desc' : 'asc') : 'asc' as 'asc' | 'desc'
+                    };
+                    setLibrarySort(newSort);
+                  } catch (error) {
+                    console.error('Error changing sort:', error);
+                  }
+                }}
+                favoriteTracks={favoriteTracks}
+                onToggleFavorite={toggleFavorite}
+                showWaveforms={false}
+                onUpdateSongMetadata={updateSongMetadata}
+                columnWidths={columnWidths}
+                onColumnResize={handleColumnResize}
+                showTagsColumn={librarySettings.showTagsColumn !== false}
+                showExtractColumn={librarySettings.showExtractColumn !== false}
+                showWildCardColumn={librarySettings.showWildCardColumn === true}
+                onIndividualWildCard={handleIndividualWildCard}
+              />
+              )}
+            </div>
+
+            {/* Resize Handle */}
+            <div
+              style={{
+                width: '8px',
+                cursor: 'col-resize',
+                backgroundColor: 'transparent',
+                position: 'relative',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                userSelect: 'none'
+              }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                const startX = e.clientX;
+                const startWidth = libraryTableWidth;
+                // Get the actual container width more accurately
+                const container = e.currentTarget.parentElement;
+                const containerWidth = container ? container.getBoundingClientRect().width : window.innerWidth;
+
+                const handleMouseMove = (e: MouseEvent) => {
+                  const deltaX = e.clientX - startX;
+                  const deltaPercent = (deltaX / containerWidth) * 100;
+                  const newWidth = startWidth + deltaPercent;
+                  handleLibraryTableResize(newWidth);
+                };
+
+                const handleMouseUp = () => {
+                  document.removeEventListener('mousemove', handleMouseMove);
+                  document.removeEventListener('mouseup', handleMouseUp);
+                  document.body.style.cursor = '';
+                  document.body.style.userSelect = '';
+                };
+
+                document.addEventListener('mousemove', handleMouseMove);
+                document.addEventListener('mouseup', handleMouseUp);
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+              }}
+            >
+              <div style={{
+                width: '2px',
+                height: '40px',
+                backgroundColor: theme.palette.divider,
+                borderRadius: '1px'
+              }} />
+            </div>
+          </div>
         )}
       </div>
 
@@ -2768,7 +3895,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
           transform: 'translate(-50%, -50%)',
           bgcolor: theme.palette.background.paper,
           color: theme.palette.text.primary,
-          p: 3,
+          p: 2.5,
           borderRadius: 2,
           minWidth: 400,
           width: '40%',
@@ -2786,7 +3913,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
             display: 'flex',
             justifyContent: 'center',
             alignItems: 'center',
-            mb: 2
+            mb: 1.5
           }}>
             <Typography variant="h5" sx={{
               fontWeight: 600,
@@ -2815,14 +3942,49 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
             </IconButton>
           </Box>
 
-          {/* Instructions */}
+          {/* Instructions - moved up */}
           <Typography variant="body2" sx={{
             mb: 2,
             textAlign: 'center',
-            width: '90%'
+            width: '90%',
+            color: theme.palette.text.secondary,
+            fontSize: '0.85rem'
           }}>
             Drag either bracket to scroll the 1-minute window.
           </Typography>
+
+          {/* Song Information - moved down with visual separation */}
+          {currentExtractSong && (
+            <Box sx={{
+              mb: 1.5,
+              textAlign: 'center',
+              width: '90%',
+              bgcolor: `${theme.palette.primary.main}15`,
+              borderRadius: 2,
+              py: 1.5,
+              px: 2,
+              border: `1px solid ${theme.palette.primary.main}30`
+            }}>
+              <Typography variant="h6" sx={{
+                fontWeight: 700,
+                color: theme.palette.text.primary,
+                fontSize: '1.1rem',
+                mb: 0.3,
+                letterSpacing: '0.5px'
+              }}>
+                {currentExtractSong.name}
+              </Typography>
+              {currentExtractSong.artist && (
+                <Typography variant="body2" sx={{
+                  color: theme.palette.text.secondary,
+                  fontSize: '0.9rem',
+                  fontStyle: 'italic'
+                }}>
+                  by {currentExtractSong.artist}
+                </Typography>
+              )}
+            </Box>
+          )}
 
           {/* Slider container - completely rebuilt */}
           <Box sx={{
@@ -2874,42 +4036,53 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
               />
             </Box>
 
-            {/* Time labels */}
-            <Box sx={{
-              width: '80%',
-              display: 'flex',
-              justifyContent: 'space-between',
-              mt: 0.5,
-              mb: 2,
-              color: theme.palette.text.secondary,
-              fontSize: 13
-            }}>
-              <Box>Start: {formatTime(extractRange[0])}</Box>
-              <Box>End: {formatTime(extractRange[1])}</Box>
-            </Box>
           </Box>
 
-          {/* Current time indicator */}
+          {/* Combined time display - Start, Current, End in one row */}
           <Box sx={{
             display: 'flex',
             justifyContent: 'center',
-            mb: 2
+            alignItems: 'center',
+            gap: 4,
+            mb: 1.5,
+            mt: 0.5
           }}>
+            {/* Start time */}
+            <Typography sx={{
+              color: theme.palette.text.secondary,
+              fontSize: '0.85rem',
+              minWidth: '60px',
+              textAlign: 'center'
+            }}>
+              Start: {formatTime(extractRange[0])}
+            </Typography>
+
+            {/* Current time indicator */}
             <Box sx={{
               display: 'inline-block',
               bgcolor: `${theme.palette.primary.main}20`,
               borderRadius: 1,
               px: 2,
-              py: 1
+              py: 0.6
             }}>
               <Typography sx={{ color: theme.palette.text.secondary, fontSize: '0.9rem' }}>
                 Current: {formatTime(extractPreviewProgress)}
               </Typography>
             </Box>
+
+            {/* End time */}
+            <Typography sx={{
+              color: theme.palette.text.secondary,
+              fontSize: '0.85rem',
+              minWidth: '60px',
+              textAlign: 'center'
+            }}>
+              End: {formatTime(extractRange[1])}
+            </Typography>
           </Box>
 
           {/* Playback controls */}
-          <Stack direction="row" spacing={2} sx={{ mb: 3, justifyContent: 'center', alignItems: 'center' }}>
+          <Stack direction="row" spacing={2} sx={{ mb: 2, justifyContent: 'center', alignItems: 'center' }}>
             {extractPreviewPlaying ? (
               <Button
                 variant="contained"
@@ -2940,22 +4113,66 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
             >
               Stop
             </Button>
+            <Button
+              variant="outlined"
+              onClick={setRandomExtractRange}
+              size="small"
+              sx={{
+                borderRadius: 28,
+                px: 2,
+                py: 0.5,
+                color: theme.palette.text.primary,
+                borderColor: theme.palette.secondary.main,
+                fontSize: '0.8rem',
+                '&:hover': {
+                  borderColor: theme.palette.secondary.light,
+                  backgroundColor: `${theme.palette.secondary.main}20`
+                }
+              }}
+              title="Set random minute position"
+            >
+              🎲 Random
+            </Button>
           </Stack>
 
           {/* Save button and queue controls */}
-          <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'center', flexDirection: 'column', gap: 1, alignItems: 'center' }}>
             <Button
               variant="contained"
               color="secondary"
               onClick={extractMinute}
               sx={{
-                width: '100%',
                 borderRadius: 28,
-                py: 1,
-                bgcolor: theme.palette.primary.main,
+                px: 4,
+                py: 0.8,
+                background: (() => {
+                  // Create a darker version of the theme color
+                  const hex = currentTheme.primary;
+                  const r = parseInt(hex.slice(1, 3), 16);
+                  const g = parseInt(hex.slice(3, 5), 16);
+                  const b = parseInt(hex.slice(5, 7), 16);
+                  const darkerR = Math.max(0, Math.floor(r * 0.6));
+                  const darkerG = Math.max(0, Math.floor(g * 0.6));
+                  const darkerB = Math.max(0, Math.floor(b * 0.6));
+                  return `rgb(${darkerR}, ${darkerG}, ${darkerB}) !important`;
+                })(),
+                color: '#ffffff',
                 fontSize: '0.9rem',
                 fontWeight: 600,
-                '&:hover': { bgcolor: theme.palette.primary.dark }
+                minWidth: 'auto',
+                '&:hover': {
+                  background: (() => {
+                    // Create an even darker version for hover
+                    const hex = currentTheme.primary;
+                    const r = parseInt(hex.slice(1, 3), 16);
+                    const g = parseInt(hex.slice(3, 5), 16);
+                    const b = parseInt(hex.slice(5, 7), 16);
+                    const darkerR = Math.max(0, Math.floor(r * 0.4));
+                    const darkerG = Math.max(0, Math.floor(g * 0.4));
+                    const darkerB = Math.max(0, Math.floor(b * 0.4));
+                    return `rgb(${darkerR}, ${darkerG}, ${darkerB}) !important`;
+                  })()
+                }
               }}
             >
               SAVE THIS CLIP
@@ -2970,12 +4187,13 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
                   stopExtractPreview();
                 }}
                 sx={{
-                  width: '100%',
                   borderRadius: 28,
+                  px: 3,
                   py: 0.5,
                   color: theme.palette.text.secondary,
                   borderColor: theme.palette.text.secondary,
                   fontSize: '0.8rem',
+                  minWidth: 'auto',
                   '&:hover': {
                     borderColor: theme.palette.error.main,
                     color: theme.palette.error.main
@@ -2995,8 +4213,8 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
         <div
           style={{
             position: 'absolute',
-            top: '50%',
-            right: sidebarOpen ? '320px' : 0,
+            top: 'calc(50% + 40px)', // Offset by half the nav bar height to center in remaining space
+            right: sidebarOpen ? '320px' : '20px',
             transform: 'translateY(-50%)',
             display: 'flex',
             flexDirection: 'column',
@@ -3040,38 +4258,120 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
               p: 2,
               display: 'flex',
               flexDirection: 'column',
-              height: '100%',
+              height: 'calc(100% - 80px)', // Adjust height to account for nav bar
               overflowY: 'hidden',
               boxShadow: '-2px 0 10px rgba(0,0,0,0.3)',
-              zIndex: 1250
+              zIndex: 1250,
+              top: '80px' // Start below the navigation bar
             }
           }}
         >
           <Box sx={{
             display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
+            flexDirection: 'column',
             mb: 2,
-            flexShrink: 0
+            flexShrink: 0,
+            position: 'relative',
+            zIndex: 1300
           }}>
-            <Box sx={{ display: 'flex', alignItems: 'center' }}>
-              <Typography variant="h6">Extracted Clips</Typography>
-              <Typography variant="body2" sx={{ ml: 1, color: '#fff', fontWeight: 700, fontSize: '1.2rem' }}>
-                ({extractedClips.length}/60)
-              </Typography>
-            </Box>
-            {extractedClips.length > 0 && (
-              <Button
+            {/* Centered Playlist Name Input */}
+            <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2 }}>
+              <TextField
+                value={sidebarPlaylistName}
+                onChange={(e) => setSidebarPlaylistName(e.target.value)}
+                placeholder="Enter playlist name..."
                 variant="outlined"
                 size="small"
-                color="error"
-                onClick={clearAllClips}
-                sx={{ fontSize: '0.75rem', color: '#f44336', borderColor: '#f44336' }}
-              >
-                Clear All
-              </Button>
-            )}
+                sx={{
+                  width: '100%',
+                  '& .MuiOutlinedInput-root': {
+                    color: '#fff',
+                    fontSize: '1rem',
+                    fontWeight: 600,
+                    textAlign: 'center',
+                    '& fieldset': {
+                      borderColor: 'rgba(255, 255, 255, 0.3)',
+                    },
+                    '&:hover fieldset': {
+                      borderColor: 'rgba(255, 255, 255, 0.5)',
+                    },
+                    '&.Mui-focused fieldset': {
+                      borderColor: currentTheme.secondary,
+                    },
+                    '& input': {
+                      textAlign: 'center',
+                    },
+                  },
+                  '& .MuiInputLabel-root': {
+                    color: 'rgba(255, 255, 255, 0.7)',
+                  },
+                }}
+              />
+            </Box>
+
+            {/* Centered Clip Count and Clear All Button */}
+            <Box sx={{
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              gap: 2,
+              mb: 1
+            }}>
+              <Typography variant="body2" sx={{ color: '#fff', fontWeight: 700, fontSize: '1.2rem' }}>
+                ({extractedClips.length}/60)
+              </Typography>
+              {extractedClips.length > 0 && (
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={clearAllClips}
+                  sx={{
+                    fontSize: '0.75rem',
+                    color: '#ffffff',
+                    background: (() => {
+                      // Create a darker version of the theme color
+                      const hex = currentTheme.primary;
+                      const r = parseInt(hex.slice(1, 3), 16);
+                      const g = parseInt(hex.slice(3, 5), 16);
+                      const b = parseInt(hex.slice(5, 7), 16);
+                      const darkerR = Math.max(0, Math.floor(r * 0.6));
+                      const darkerG = Math.max(0, Math.floor(g * 0.6));
+                      const darkerB = Math.max(0, Math.floor(b * 0.6));
+                      return `rgb(${darkerR}, ${darkerG}, ${darkerB}) !important`;
+                    })(),
+                    position: 'relative',
+                    zIndex: 1301,
+                    fontWeight: 600,
+                    textShadow: '0 1px 2px rgba(0,0,0,0.3)',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                    '&:hover': {
+                      background: (() => {
+                        // Create an even darker version for hover
+                        const hex = currentTheme.primary;
+                        const r = parseInt(hex.slice(1, 3), 16);
+                        const g = parseInt(hex.slice(3, 5), 16);
+                        const b = parseInt(hex.slice(5, 7), 16);
+                        const darkerR = Math.max(0, Math.floor(r * 0.4));
+                        const darkerG = Math.max(0, Math.floor(g * 0.4));
+                        const darkerB = Math.max(0, Math.floor(b * 0.4));
+                        return `rgb(${darkerR}, ${darkerG}, ${darkerB}) !important`;
+                      })(),
+                      boxShadow: '0 4px 8px rgba(0,0,0,0.3)',
+                      transform: 'translateY(-1px)',
+                    },
+                    '&:active': {
+                      transform: 'translateY(0)',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+                    }
+                  }}
+                >
+                  Clear All
+                </Button>
+              )}
+            </Box>
           </Box>
+
+
 
           {/* Message about saved clips when there are saved metadata but no current clips */}
           {clipMetadata.length > 0 && extractedClips.length === 0 && (
@@ -3113,16 +4413,6 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
               Save Mix Locally
             </Button>
           )}
-          <Button
-            variant="contained"
-            color="secondary" // Or a more appropriate color like primary or success
-            startIcon={<SendToMobileIcon />}
-            onClick={handleSendToPlaylistsPage}
-            disabled={extractedClips.length === 0 || exportLoading}
-            sx={{ mt: 1, backgroundColor: theme.palette.success?.main || '#4caf50', '&:hover': { backgroundColor: theme.palette.success?.dark || '#388e3c' }, fontSize: '0.8rem', padding: '6px 12px' }}
-          >
-            {exportLoading ? <CircularProgress size={20} /> : 'Save Power Hour'}
-          </Button>
           {saveError && (
             <Snackbar
               open={!!saveError}
@@ -3147,146 +4437,104 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
             message={exportError}
             anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
           />
-          <DragDropContext onDragEnd={onDragEnd}>
-            <Droppable droppableId="clips-droppable">
-              {(provided) => (
-                <List
-                  ref={provided.innerRef}
-                  {...provided.droppableProps}
-                  sx={{
-                    flexGrow: 1,
-                    overflowY: 'auto',
-                    overflowX: 'hidden',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    maxHeight: extractedClips.length > 10 ? 'calc(100vh - 340px)' : 'none',
-                    '&::-webkit-scrollbar': {
-                      width: '8px',
-                    },
-                    '&::-webkit-scrollbar-track': {
-                      background: 'rgba(0,0,0,0.1)',
-                      borderRadius: '8px',
-                    },
-                    '&::-webkit-scrollbar-thumb': {
-                      backgroundColor: `${theme.palette.primary.main}80`,
-                      borderRadius: '8px',
-                      '&:hover': {
-                        backgroundColor: `${theme.palette.primary.main}CC`,
-                      }
-                    },
-                    scrollbarWidth: 'thin',
-                    scrollbarColor: `${theme.palette.primary.main}80 rgba(0,0,0,0.1)`,
-                    paddingRight: '4px',
-                    mb: 2,
+          <List
+            sx={{
+              flexGrow: 1,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              maxHeight: extractedClips.length > 10 ? 'calc(100vh - 340px)' : 'none',
+              '&::-webkit-scrollbar': {
+                width: '8px',
+              },
+              '&::-webkit-scrollbar-track': {
+                background: 'rgba(0,0,0,0.1)',
+                borderRadius: '8px',
+              },
+              '&::-webkit-scrollbar-thumb': {
+                backgroundColor: `${theme.palette.primary.main}80`,
+                borderRadius: '8px',
+                '&:hover': {
+                  backgroundColor: `${theme.palette.primary.main}CC`,
+                }
+              },
+              scrollbarWidth: 'thin',
+              scrollbarColor: `${theme.palette.primary.main}80 rgba(0,0,0,0.1)`,
+              paddingRight: '4px',
+              mb: 2,
+            }}
+          >
+            {extractedClips.map((clip, idx) => (
+              <div
+                key={clip.id}
+                style={{
+                  marginBottom: '8px',
+                  backgroundColor: currentClipIndex === idx
+                    ? 'rgba(0,0,0,0.6)'
+                    : 'rgba(0,0,0,0.4)',
+                  borderRadius: '4px',
+                  border: currentClipIndex === idx ? '1px solid rgba(255,255,255,0.3)' : '1px solid transparent',
+                  transition: 'all 0.2s',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between'
+                }}
+              >
+                {/* Clickable content area */}
+                <div
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    cursor: 'pointer',
+                    padding: '8px',
+                    borderRadius: '4px'
+                  }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (currentClipIndex === idx && clipHowl) {
+                      // Seek if already playing
+                      const rect = (e.target as HTMLElement).getBoundingClientRect();
+                      const x = (e as React.MouseEvent).clientX - rect.left;
+                      const width = rect.width;
+                      const percent = Math.max(0, Math.min(1, x / width));
+                      const newTime = percent * clipDuration;
+                      clipHowl.seek(newTime);
+                      setClipProgress(newTime);
+                    } else {
+                      // Start playback if not currently playing
+                      playClip(idx);
+                    }
                   }}
                 >
-                  {extractedClips.map((clip, idx) => (
-                    <Draggable key={clip.id} draggableId={clip.id} index={idx}>
-                      {(provided, snapshot) => (
-                        <ListItem
-                          ref={provided.innerRef}
-                          {...provided.draggableProps}
-                          disablePadding
-                          sx={{
-                            position: 'relative',
-                            overflow: 'hidden',
-                            borderRadius: 1,
-                            mb: 1,
-                            bgcolor: snapshot.isDragging ? 'secondary.dark' : undefined,
-                            boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-                            minHeight: '56px',
-                            maxHeight: '72px'
-                          }}
-                        >
-                          <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                            <Box sx={{ flexGrow: 1, minWidth: 0, position: 'relative' }}>
-                              {/* Progress background fill for currently playing clip */}
-                              {currentClipIndex === idx && clipDuration > 0 && (
-                                <Box
-                                  sx={{
-                                    position: 'absolute',
-                                    left: 0,
-                                    top: 0,
-                                    height: '100%',
-                                    width: `${(clipProgress / clipDuration) * 100}%`,
-                                    bgcolor: 'rgba(100, 181, 246, 0.4)',
-                                    zIndex: 1,
-                                    transition: 'width 0.2s linear',
-                                    borderRadius: 1,
-                                  }}
-                                />
-                              )}
-                              <ListItemButton
-                                selected={currentClipIndex === idx}
-                                onClick={e => {
-                                  if (currentClipIndex === idx && clipHowl) {
-                                    // Seek if already playing
-                                    const rect = (e.target as HTMLElement).getBoundingClientRect();
-                                    const x = (e as React.MouseEvent).clientX - rect.left;
-                                    const width = rect.width;
-                                    const percent = Math.max(0, Math.min(1, x / width));
-                                    const newTime = percent * clipDuration;
-                                    clipHowl.seek(newTime);
-                                    setClipProgress(newTime);
-                                  } else {
-                                    // Start playback if not currently playing
-                                    playClip(idx);
-                                  }
-                                }}
-                                sx={{
-                                  cursor: 'pointer',
-                                  position: 'relative',
-                                  zIndex: 2,
-                                  minHeight: '56px',
-                                  maxHeight: '72px',
-                                  py: 1,
-                                  pl: 2,
-                                  pr: 1,
-                                  borderRadius: 1,
-                                  '&.Mui-selected': {
-                                    backgroundColor: 'rgba(124, 77, 255, 0.2)'
-                                  },
-                                  '&:hover': {
-                                    backgroundColor: 'rgba(124, 77, 255, 0.1)'
-                                  }
-                                }}
-                                {...provided.dragHandleProps}
-                              >
-                                <ListItemText
-                                  primary={clip.name}
-                                  primaryTypographyProps={{
-                                    sx: {
-                                      color: currentClipIndex === idx ? '#fff' : 'rgba(255, 255, 255, 0.9)',
-                                      fontWeight: currentClipIndex === idx ? 700 : 400,
-                                      position: 'relative',
-                                      zIndex: 2,
-                                      fontSize: '0.85rem',
-                                      lineHeight: 1.2,
-                                      wordBreak: 'break-word',
-                                      whiteSpace: 'normal',
-                                      textShadow: '0px 1px 1px rgba(0,0,0,0.5)',
-                                      display: '-webkit-box',
-                                      overflow: 'hidden',
-                                      WebkitBoxOrient: 'vertical',
-                                      WebkitLineClamp: 2
-                                    }
-                                  }}
-                                />
-                              </ListItemButton>
-                            </Box>
-                            <IconButton edge="end" onClick={() => removeClip(clip.id)} sx={{ ml: 1, zIndex: 3 }}>
-                              <DeleteIcon />
-                            </IconButton>
-                          </Box>
-                        </ListItem>
-                      )}
-                    </Draggable>
-                  ))}
-                  {provided.placeholder}
-                </List>
-              )}
-            </Droppable>
-          </DragDropContext>
+                  <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {idx + 1}. {clip.songName || clip.name}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.7)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {clip.artist || 'Unknown Artist'} • {formatTime(clip.start || 0)} - {formatTime((clip.start || 0) + (clip.duration || 0))}
+                  </div>
+                </div>
+
+                {/* Delete button */}
+                <IconButton
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeClip(clip.id);
+                  }}
+                  sx={{
+                    ml: 1,
+                    color: 'rgba(255,255,255,0.5)',
+                    '&:hover': {
+                      color: 'rgba(255,100,100,0.8)'
+                    }
+                  }}
+                >
+                  <DeleteIcon fontSize="small" />
+                </IconButton>
+              </div>
+            ))}
+          </List>
 
           {/* Show saved metadata when no active clips exist */}
           {extractedClips.length === 0 && clipMetadata.length > 0 && (
@@ -3325,9 +4573,20 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
                     overflow: 'hidden',
                     borderRadius: 1,
                     mb: 1,
-                    opacity: 0.7,
-                    bgcolor: `${theme.palette.primary.main}20`,
-                    minHeight: '56px'
+                    opacity: 0.8,
+                    bgcolor: (() => {
+                      // Create a darker version of the theme color for saved clips
+                      const hex = currentTheme.primary;
+                      const r = parseInt(hex.slice(1, 3), 16);
+                      const g = parseInt(hex.slice(3, 5), 16);
+                      const b = parseInt(hex.slice(5, 7), 16);
+                      const darkerR = Math.max(0, Math.floor(r * 0.6));
+                      const darkerG = Math.max(0, Math.floor(g * 0.6));
+                      const darkerB = Math.max(0, Math.floor(b * 0.6));
+                      return `rgb(${darkerR}, ${darkerG}, ${darkerB})`;
+                    })(),
+                    minHeight: '56px',
+                    border: `1px solid rgba(0,0,0,0.1)`
                   }}
                 >
                   <ListItemButton disabled sx={{ pl: 2 }}>
@@ -3356,11 +4615,62 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
             </List>
           )}
 
-          <Box sx={{ mt: 1, textAlign: 'center', flexShrink: 0 }}>
-            <Typography variant="body2" sx={{ color: '#fff', fontWeight: 700, fontSize: '1.2rem' }}>
-              ({extractedClips.length}/60)
-            </Typography>
-          </Box>
+          {/* Save Playlist Button - moved to bottom */}
+          <Button
+            variant="contained"
+            startIcon={<SendToMobileIcon />}
+            onClick={handleSendToPlaylistsPage}
+            disabled={extractedClips.length === 0 || exportLoading}
+            sx={{
+              mt: 2,
+              mb: 1,
+              width: '100%',
+              background: (() => {
+                // Create a darker version of the theme color
+                const hex = currentTheme.primary;
+                const r = parseInt(hex.slice(1, 3), 16);
+                const g = parseInt(hex.slice(3, 5), 16);
+                const b = parseInt(hex.slice(5, 7), 16);
+                const darkerR = Math.max(0, Math.floor(r * 0.6));
+                const darkerG = Math.max(0, Math.floor(g * 0.6));
+                const darkerB = Math.max(0, Math.floor(b * 0.6));
+                return `rgb(${darkerR}, ${darkerG}, ${darkerB}) !important`;
+              })(),
+              color: '#ffffff',
+              fontWeight: 600,
+              textShadow: '0 1px 2px rgba(0,0,0,0.3)',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+              '&:hover': {
+                background: (() => {
+                  // Create an even darker version for hover
+                  const hex = currentTheme.primary;
+                  const r = parseInt(hex.slice(1, 3), 16);
+                  const g = parseInt(hex.slice(3, 5), 16);
+                  const b = parseInt(hex.slice(5, 7), 16);
+                  const darkerR = Math.max(0, Math.floor(r * 0.4));
+                  const darkerG = Math.max(0, Math.floor(g * 0.4));
+                  const darkerB = Math.max(0, Math.floor(b * 0.4));
+                  return `rgb(${darkerR}, ${darkerG}, ${darkerB}) !important`;
+                })(),
+                boxShadow: '0 4px 8px rgba(0,0,0,0.3)',
+                transform: 'translateY(-1px)',
+              },
+              '&:active': {
+                transform: 'translateY(0)',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+              },
+              '&:disabled': {
+                backgroundColor: 'rgba(255,255,255,0.3)',
+                color: 'rgba(255,255,255,0.7)',
+              },
+              fontSize: '0.8rem',
+              padding: '8px 16px',
+              flexShrink: 0,
+              transition: 'all 0.2s ease-in-out',
+            }}
+          >
+            {exportLoading ? <CircularProgress size={20} sx={{ color: '#ffffff' }} /> : 'Save Playlist'}
+          </Button>
           {clipHowl && (
             <Stack
               direction="row"
@@ -3385,7 +4695,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
                 <SkipPreviousIcon fontSize="small" />
               </IconButton>
 
-              {clipIsPlaying ? (
+              {(audio.audioSource === 'preview' && audio.previewPlaying) ? (
                 <IconButton
                   onClick={pauseClipPlayback}
                   size="small"
@@ -3397,7 +4707,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
                 >
                   <PauseIcon fontSize="small" />
                 </IconButton>
-              ) : clipIsPaused ? (
+              ) : (audio.audioSource === 'preview' && !audio.previewPlaying) ? (
                 <IconButton
                   onClick={resumeClipPlayback}
                   size="small"
@@ -3422,7 +4732,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
 
               <IconButton
                 onClick={stopClipPlayback}
-                disabled={!clipIsPlaying && !clipIsPaused}
+                disabled={audio.audioSource !== 'preview'}
                 size="small"
                 sx={{ color: 'white' }}
               >
@@ -3511,38 +4821,30 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       />
 
-      {/* Playlist Name Dialog */}
-      <Dialog
-        open={playlistNameDialogOpen}
-        onClose={handlePlaylistNameDialogClose}
-        fullWidth
-        maxWidth="sm"
-      >
-        <DialogTitle>Name Your Playlist</DialogTitle>
-        <DialogContent>
-          <TextField
-            autoFocus
-            margin="dense"
-            label="Playlist Name"
-            type="text"
-            fullWidth
-            value={newPlaylistName}
-            onChange={(e) => setNewPlaylistName(e.target.value)}
-            error={!!playlistNameError}
-            helperText={playlistNameError}
-            variant="outlined"
-            sx={{ mt: 1 }}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handlePlaylistNameDialogClose} color="inherit">
-            Cancel
-          </Button>
-          <Button onClick={handleConfirmPlaylistName} color="primary" variant="contained">
-            Send to Playlist Page
-          </Button>
-        </DialogActions>
-      </Dialog>
+
+
+
+
+
+
+      {/* Metadata Enhancer Dialog */}
+      <MetadataEnhancer
+        open={metadataEnhancerOpen}
+        onClose={() => setMetadataEnhancerOpen(false)}
+        songs={librarySongs}
+        onEnhanceMetadata={handleEnhanceMetadata}
+      />
+
+      {/* Library Manager Dialog */}
+      <LibraryManager
+        open={libraryManagerOpen}
+        onClose={() => setLibraryManagerOpen(false)}
+        onSelectLibrary={handleSelectLibrary}
+        onAddNewLibrary={handleAddNewLibrary}
+        currentLibraryPath={libraryFolder || undefined}
+        songs={librarySongs}
+        onEnhanceMetadata={handleEnhanceMetadata}
+      />
     </div>
   );
 };

@@ -51,9 +51,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createMixFromPlaylist: (playlistId) => ipcRenderer.invoke('createMixFromPlaylist', playlistId),
   // Drinking sound handlers
   selectDrinkingSound: () => ipcRenderer.invoke('selectDrinkingSound'),
+  saveDrinkingSound: (buffer) => ipcRenderer.invoke('save-drinking-sound', buffer),
   // Playlist image handlers
   selectPlaylistImage: () => ipcRenderer.invoke('selectPlaylistImage'),
   // Clip file operations
   saveClipToFile: (clipId, buffer, clipMeta) => ipcRenderer.invoke('saveClipToFile', clipId, buffer, clipMeta),
-  getClipFromFile: (clipPath) => ipcRenderer.invoke('getClipFromFile', clipPath)
+  getClipFromFile: (clipPath) => ipcRenderer.invoke('getClipFromFile', clipPath),
+  // Album art operations
+  extractAlbumArt: (filePath) => ipcRenderer.invoke('extract-album-art', filePath),
+  lookupAlbumArt: (artist, album) => ipcRenderer.invoke('lookup-album-art', artist, album),
+  // yt-dlp operations
+  ytDlpCheckAvailability: () => ipcRenderer.invoke('yt-dlp-check-availability'),
+  ytDlpSearch: (query, maxResults) => ipcRenderer.invoke('yt-dlp-search', query, maxResults),
+  ytDlpChannelSearch: (query, maxResults, pageToken, sortOrder) => ipcRenderer.invoke('yt-dlp-channel-search', query, maxResults, pageToken, sortOrder),
+  ytDlpChannelVideos: (channelId, maxResults, pageToken) => ipcRenderer.invoke('yt-dlp-channel-videos', channelId, maxResults, pageToken),
+  ytDlpGetVideoDetails: (videoId) => ipcRenderer.invoke('yt-dlp-get-video-details', videoId)
 });

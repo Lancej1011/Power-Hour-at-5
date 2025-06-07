@@ -19,6 +19,11 @@ interface Playlist {
     duration: number;
     songName?: string;
     clipPath?: string;
+    // Add metadata fields
+    artist?: string;
+    album?: string;
+    year?: string;
+    genre?: string;
   }>;
   drinkingSoundPath?: string;
 }
@@ -87,6 +92,17 @@ interface ElectronAPI {
   // Clip file operations
   saveClipToFile: (clipId: string, buffer: ArrayBuffer, clipMeta: any) => Promise<{ success: boolean; clipPath?: string; metadata?: any; message?: string }>;
   getClipFromFile: (clipPath: string) => Promise<{ buffer: ArrayBuffer; metadata: any } | null>;
+
+  // Album art operations
+  extractAlbumArt: (filePath: string) => Promise<{ success: boolean; imageBuffer?: ArrayBuffer; mimeType?: string; message?: string }>;
+  lookupAlbumArt: (artist: string, album: string) => Promise<{ success: boolean; imageUrl?: string; message?: string }>;
+  saveDrinkingSound: (buffer: ArrayBuffer) => Promise<{ success: boolean; path?: string; message?: string }>;
+
+  // yt-dlp operations
+  ytDlpSearch: (query: string, maxResults: number) => Promise<{ success: boolean; data?: any; error?: string }>;
+  ytDlpChannelSearch: (query: string, maxResults: number, pageToken?: string, sortOrder?: string) => Promise<{ success: boolean; data?: any; error?: string }>;
+  ytDlpChannelVideos: (channelId: string, maxResults: number, pageToken?: string) => Promise<{ success: boolean; data?: any; error?: string }>;
+  ytDlpGetVideoDetails: (videoId: string) => Promise<{ success: boolean; data?: any; error?: string }>;
 }
 
 // Extend the Window interface to include our Electron API

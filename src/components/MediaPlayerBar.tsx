@@ -2,20 +2,32 @@ import React, { useState } from 'react';
 import { Box, IconButton, Typography, Slider, Paper, Popover } from '@mui/material';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import PauseIcon from '@mui/icons-material/Pause';
+import StopIcon from '@mui/icons-material/Stop';
+import SkipPreviousIcon from '@mui/icons-material/SkipPrevious';
+import SkipNextIcon from '@mui/icons-material/SkipNext';
 import CloseIcon from '@mui/icons-material/Close';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import VolumeOffIcon from '@mui/icons-material/VolumeOff';
 
 interface MediaPlayerBarProps {
   open: boolean;
-  mix: { name: string; songList: string[] } | null;
-  audio: HTMLAudioElement | null;
+  title: string;
+  subtitle?: string;
   playing: boolean;
   currentTime: number;
   duration: number;
   onPlayPause: () => void;
   onSeek: (value: number) => void;
+  onStop?: () => void;
+  onPrevious?: () => void;
+  onNext?: () => void;
   onClose: () => void;
+  showVolumeControl?: boolean;
+  volume?: number;
+  isMuted?: boolean;
+  onVolumeChange?: (value: number) => void;
+  onMuteToggle?: () => void;
+  audio?: HTMLAudioElement | null;
 }
 
 const formatTime = (s: number) => {
@@ -26,17 +38,28 @@ const formatTime = (s: number) => {
 
 const MediaPlayerBar: React.FC<MediaPlayerBarProps> = ({
   open,
-  mix,
-  audio,
+  title,
+  subtitle,
   playing,
   currentTime,
   duration,
   onPlayPause,
   onSeek,
+  onStop,
+  onPrevious,
+  onNext,
   onClose,
+  showVolumeControl = true,
+  volume = 1,
+  isMuted = false,
+  onVolumeChange,
+  onMuteToggle,
+  audio,
 }) => {
   const [volumeAnchor, setVolumeAnchor] = useState<null | HTMLElement>(null);
-  const [volume, setVolume] = useState(1);
+  const [localVolume, setLocalVolume] = useState(1);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragValue, setDragValue] = useState(0);
 
   const handleVolumeClick = (event: React.MouseEvent<HTMLElement>) => {
     setVolumeAnchor(event.currentTarget);
@@ -46,11 +69,16 @@ const MediaPlayerBar: React.FC<MediaPlayerBarProps> = ({
   };
   const handleVolumeChange = (_: any, value: number | number[]) => {
     const v = Array.isArray(value) ? value[0] : value;
-    setVolume(v);
-    if (audio) audio.volume = v;
+    setLocalVolume(v);
+    if (onVolumeChange) {
+      onVolumeChange(v);
+    } else if (audio) {
+      audio.volume = v;
+    }
   };
 
-  if (!open || !mix) return null;
+  if (!open || !title) return null;
+
   return (
     <Paper elevation={8} sx={{
       position: 'fixed',
@@ -58,39 +86,74 @@ const MediaPlayerBar: React.FC<MediaPlayerBarProps> = ({
       transform: 'translateX(-50%)',
       bottom: 24,
       zIndex: 2000,
-      p: 1.2,
+      p: 1.5,
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
       bgcolor: 'background.paper',
       borderRadius: 3,
       boxShadow: 6,
-      minWidth: 320,
-      maxWidth: 420,
+      minWidth: 400,
+      maxWidth: 500,
       width: '100%',
-      minHeight: 80,
-      justifyContent: 'flex-start',
+      minHeight: 100,
     }}>
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'center', flex: 1, width: '100%' }}>
-        <IconButton onClick={onPlayPause} sx={{ mr: 1 }}>
+      {/* Main Controls Row */}
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', mb: 1 }}>
+        {onPrevious && (
+          <IconButton onClick={onPrevious} sx={{ mr: 1 }}>
+            <SkipPreviousIcon />
+          </IconButton>
+        )}
+        <IconButton onClick={onPlayPause} sx={{ mr: 1, bgcolor: 'primary.main', color: 'white', '&:hover': { bgcolor: 'primary.dark' } }}>
           {playing ? <PauseIcon /> : <PlayArrowIcon />}
         </IconButton>
-        <Box sx={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column', justifyContent: 'flex-start' }}>
+        {onStop && (
+          <IconButton onClick={onStop} sx={{ mr: 1 }}>
+            <StopIcon />
+          </IconButton>
+        )}
+        {onNext && (
+          <IconButton onClick={onNext} sx={{ mr: 2 }}>
+            <SkipNextIcon />
+          </IconButton>
+        )}
+
+        {/* Progress Slider */}
+        <Box sx={{ flex: 1, mx: 2 }}>
           <Slider
             min={0}
-            max={duration}
-            value={currentTime}
-            onChange={(_, v) => onSeek(Number(v))}
+            max={duration || 0}
+            value={isDragging ? dragValue : currentTime}
+            onChange={(_, v) => {
+              setIsDragging(true);
+              setDragValue(Number(v));
+            }}
+            onChangeCommitted={(_, v) => {
+              setIsDragging(false);
+              onSeek(Number(v));
+            }}
             sx={{ width: '100%' }}
+            disabled={!duration || duration === 0}
           />
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', position: 'absolute', top: 28, left: 0 }}>
-            <Typography variant="caption">{formatTime(currentTime)}</Typography>
-            <Typography variant="caption">{formatTime(duration)}</Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+            <Typography variant="caption">{formatTime(isDragging ? dragValue : currentTime)}</Typography>
+            <Typography variant="caption">{formatTime(duration || 0)}</Typography>
           </Box>
         </Box>
-        <IconButton onClick={handleVolumeClick} sx={{ ml: 1 }}>
-          {volume === 0 ? <VolumeOffIcon /> : <VolumeUpIcon />}
+
+        {showVolumeControl && (
+          <IconButton onClick={handleVolumeClick} sx={{ ml: 1 }}>
+            {isMuted || volume === 0 ? <VolumeOffIcon /> : <VolumeUpIcon />}
+          </IconButton>
+        )}
+        <IconButton onClick={onClose} sx={{ ml: 1 }}>
+          <CloseIcon />
         </IconButton>
+      </Box>
+
+      {/* Volume Popover */}
+      {showVolumeControl && (
         <Popover
           open={Boolean(volumeAnchor)}
           anchorEl={volumeAnchor}
@@ -111,31 +174,63 @@ const MediaPlayerBar: React.FC<MediaPlayerBarProps> = ({
         >
           <Box sx={{
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
+            justifyContent: 'center',
             px: 2,
             py: 2,
             bgcolor: 'background.paper',
             borderRadius: 3,
             boxShadow: 3,
-            height: 120,
-            minWidth: 56
+            height: 140,
+            minWidth: 56,
+            overflow: 'hidden'
           }}>
             <Slider
               orientation="vertical"
               min={0}
               max={1}
               step={0.01}
-              value={volume}
+              value={isMuted ? 0 : (onVolumeChange ? volume : localVolume)}
               onChange={handleVolumeChange}
-              sx={{ height: 100 }}
+              sx={{
+                height: 100,
+                '& .MuiSlider-track': {
+                  width: 4,
+                },
+                '& .MuiSlider-rail': {
+                  width: 4,
+                },
+                '& .MuiSlider-thumb': {
+                  width: 16,
+                  height: 16,
+                }
+              }}
             />
+            {onMuteToggle && (
+              <IconButton
+                onClick={onMuteToggle}
+                size="small"
+                sx={{ mt: 1 }}
+              >
+                {isMuted ? <VolumeOffIcon fontSize="small" /> : <VolumeUpIcon fontSize="small" />}
+              </IconButton>
+            )}
           </Box>
         </Popover>
-        <IconButton onClick={onClose} sx={{ ml: 1 }}>
-          <CloseIcon />
-        </IconButton>
+      )}
+
+      {/* Track Info */}
+      <Box sx={{ textAlign: 'center', width: '100%' }}>
+        <Typography variant="subtitle1" noWrap sx={{ fontWeight: 'bold' }}>
+          {title}
+        </Typography>
+        {subtitle && (
+          <Typography variant="body2" color="text.secondary" noWrap>
+            {subtitle}
+          </Typography>
+        )}
       </Box>
-      <Typography variant="subtitle1" noWrap sx={{ mt: 1, textAlign: 'center', width: '100%' }}>{mix.name}</Typography>
     </Paper>
   );
 };

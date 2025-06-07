@@ -21,12 +21,45 @@ body {
 }
 
 /* Reset MUI containers to not center content */
-.MuiContainer-root, .MuiBox-root {
+.MuiContainer-root {
   max-width: 100% !important;
   margin-left: 0 !important;
   margin-right: 0 !important;
   padding-left: 0 !important;
   padding-right: 0 !important;
+}
+
+/* Only reset top-level Box components, not all Box components */
+#root > div > .MuiBox-root {
+  max-width: 100% !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+/* Allow main content areas to have proper padding - more specific than App.tsx inline styles */
+.MuiBox-root.playlists-main-content {
+  padding-left: 48px !important; /* Force left padding for desktop */
+  padding-right: 40px !important; /* Force right padding for desktop */
+}
+
+/* Responsive padding for different screen sizes */
+@media (max-width: 900px) {
+  .MuiBox-root.playlists-main-content {
+    padding-left: 40px !important; /* Tablet */
+  }
+}
+
+@media (max-width: 600px) {
+  .MuiBox-root.playlists-main-content {
+    padding-left: 32px !important; /* Mobile */
+    padding-right: 16px !important;
+  }
+}
+
+/* Ensure playlist grid container doesn't override parent padding */
+.MuiBox-root.playlist-grid-container {
+  padding: unset !important;
+  margin: unset !important;
 }
 
 /* Table tweaks for better spacing */
@@ -48,6 +81,58 @@ td, th {
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
+}
+
+/* Theme-aware scrollbar styles */
+/* Dark theme scrollbars */
+[data-theme="dark"] ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Light theme scrollbars */
+[data-theme="light"] ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 8px;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Firefox scrollbar theming */
+[data-theme="dark"] * {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="light"] * {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) rgba(0, 0, 0, 0.05);
 }
 
 /* Don't center root containers */

@@ -1,18 +1,37 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 
-export type VisualizerType = 'bars' | 'circular' | 'waveform' | 'particles';
+export type VisualizerType = 'bars' | 'circular' | 'waveform' | 'particles' | 'spectrum' | 'mandala' | 'liquid' | 'galaxy';
 
 export interface VisualizerSettings {
   type: VisualizerType;
   showSongInfo: boolean;
+  showAnalysis: boolean;
   fullScreen: boolean;
+  triviaMode: boolean;
   sensitivity: number;
-  colorMode: 'theme' | 'rainbow' | 'custom';
+  colorMode: 'theme' | 'rainbow' | 'custom' | 'gradient' | 'reactive' | 'frequency';
   customColor: string;
   barCount: number;
   smoothing: number;
   particleCount: number;
   backgroundOpacity: number;
+  // Enhanced visual effects
+  bloomIntensity: number;
+  motionBlur: boolean;
+  beatReactive: boolean;
+  glowEffect: boolean;
+  // Color enhancements
+  gradientColors: string[];
+  colorCycleSpeed: number;
+  frequencyColorMapping: boolean;
+  // Performance settings
+  renderQuality: 'low' | 'medium' | 'high' | 'ultra';
+  // Album art display
+  showAlbumArt: boolean;
+  albumArtSize: 'small' | 'medium' | 'large';
+  albumArtPosition: 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+  albumArtOpacity: number;
+  enableOnlineAlbumArt: boolean;
 }
 
 interface VisualizerContextType {
@@ -24,7 +43,9 @@ interface VisualizerContextType {
 const defaultSettings: VisualizerSettings = {
   type: 'bars',
   showSongInfo: true,
+  showAnalysis: false,
   fullScreen: false,
+  triviaMode: false,
   sensitivity: 1.0,
   colorMode: 'theme',
   customColor: '#ff6b6b',
@@ -32,6 +53,23 @@ const defaultSettings: VisualizerSettings = {
   smoothing: 0.8,
   particleCount: 100,
   backgroundOpacity: 0.1,
+  // Enhanced visual effects
+  bloomIntensity: 0.5,
+  motionBlur: false,
+  beatReactive: true,
+  glowEffect: true,
+  // Color enhancements
+  gradientColors: ['#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#feca57'],
+  colorCycleSpeed: 1.0,
+  frequencyColorMapping: false,
+  // Performance settings
+  renderQuality: 'high',
+  // Album art display
+  showAlbumArt: false,
+  albumArtSize: 'medium',
+  albumArtPosition: 'center',
+  albumArtOpacity: 0.8,
+  enableOnlineAlbumArt: true,
 };
 
 const VisualizerContext = createContext<VisualizerContextType | undefined>(undefined);
