@@ -11,6 +11,10 @@ interface LibrarySong {
   albumArt?: string;
   fileSize?: number;
   lastModified?: number;
+  tags?: string[];
+  // Library information (added when loading from multiple libraries)
+  libraryPath?: string;
+  libraryName?: string;
 }
 
 interface LibraryCache {
@@ -70,9 +74,14 @@ class LibraryPersistenceManager {
     try {
       // Load libraries
       const librariesData = localStorage.getItem(STORAGE_KEYS.LIBRARIES);
+
       if (librariesData) {
         const parsedLibraries = JSON.parse(librariesData);
         this.libraries = new Map(Object.entries(parsedLibraries));
+        console.log('LibraryPersistenceManager: Loaded', this.libraries.size, 'libraries from storage');
+
+        // Migrate libraries with old ID format to new format
+        this.migrateLibraryIds();
       }
 
       // Load settings
@@ -112,7 +121,62 @@ class LibraryPersistenceManager {
 
   // Generate unique ID for library path
   private generateLibraryId(path: string): string {
-    return btoa(path).replace(/[^a-zA-Z0-9]/g, '').substring(0, 16);
+    // Use a more robust ID generation that includes the full path hash
+    const normalizedPath = path.replace(/\\/g, '/').toLowerCase();
+    const base64 = btoa(normalizedPath).replace(/[^a-zA-Z0-9]/g, '');
+
+    // Create a simple hash of the path for additional uniqueness
+    let hash = 0;
+    for (let i = 0; i < normalizedPath.length; i++) {
+      const char = normalizedPath.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+
+    // Combine base64 and hash for a more unique ID
+    const hashStr = Math.abs(hash).toString(36);
+    const id = `${base64.substring(0, 12)}_${hashStr}`.substring(0, 20);
+    return id;
+  }
+
+  // Migrate libraries from old ID format to new format
+  private migrateLibraryIds(): void {
+    const librariesToMigrate: Array<[string, LibraryCache]> = [];
+
+    // Find libraries that need migration (old format IDs are typically 16 chars without underscore)
+    for (const [oldId, library] of this.libraries) {
+      if (oldId.length <= 16 && !oldId.includes('_')) {
+        const newId = this.generateLibraryId(library.path);
+        if (newId !== oldId) {
+          librariesToMigrate.push([oldId, library]);
+        }
+      }
+    }
+
+    // Migrate libraries to new ID format
+    if (librariesToMigrate.length > 0) {
+      console.log(`Migrating ${librariesToMigrate.length} libraries to new ID format`);
+
+      for (const [oldId, library] of librariesToMigrate) {
+        const newId = this.generateLibraryId(library.path);
+
+        // Update the library with new ID
+        library.id = newId;
+        this.libraries.set(newId, library);
+        this.libraries.delete(oldId);
+
+        // Update current library reference if needed
+        const currentId = localStorage.getItem(STORAGE_KEYS.CURRENT_LIBRARY);
+        if (currentId === oldId) {
+          localStorage.setItem(STORAGE_KEYS.CURRENT_LIBRARY, newId);
+        }
+
+        console.log(`Migrated library "${library.name}" from ID ${oldId} to ${newId}`);
+      }
+
+      // Save the migrated libraries
+      this.saveToStorage();
+    }
   }
 
   // Check if library needs refresh
@@ -144,7 +208,7 @@ class LibraryPersistenceManager {
   }
 
   // Save library to cache
-  saveLibrary(libraryPath: string, songs: LibrarySong[], libraryName?: string): void {
+  saveLibrary(libraryPath: string, songs: LibrarySong[], libraryName?: string, setAsCurrent: boolean = false): void {
     const libraryId = this.generateLibraryId(libraryPath);
     const now = Date.now();
 
@@ -165,21 +229,28 @@ class LibraryPersistenceManager {
     this.libraries.set(libraryId, libraryCache);
     this.saveToStorage();
 
-    // Set as current library
-    localStorage.setItem(STORAGE_KEYS.CURRENT_LIBRARY, libraryId);
-
-    console.log(`Saved library "${libraryCache.name}" with ${songs.length} songs to cache`);
+    // Only set as current library if explicitly requested
+    if (setAsCurrent) {
+      localStorage.setItem(STORAGE_KEYS.CURRENT_LIBRARY, libraryId);
+      console.log(`Saved library "${libraryCache.name}" with ${songs.length} songs to cache and set as current`);
+    } else {
+      console.log(`Saved library "${libraryCache.name}" with ${songs.length} songs to cache`);
+    }
   }
 
   // Load library from cache
-  loadLibrary(libraryPath: string): LibrarySong[] | null {
+  loadLibrary(libraryPath: string, setAsCurrent: boolean = false): LibrarySong[] | null {
     const libraryId = this.generateLibraryId(libraryPath);
     const cached = this.libraries.get(libraryId);
 
     if (!cached) return null;
 
     console.log(`Loaded library "${cached.name}" from cache with ${cached.songs.length} songs`);
-    localStorage.setItem(STORAGE_KEYS.CURRENT_LIBRARY, libraryId);
+
+    // Only set as current library if explicitly requested
+    if (setAsCurrent) {
+      localStorage.setItem(STORAGE_KEYS.CURRENT_LIBRARY, libraryId);
+    }
 
     return cached.songs;
   }
@@ -195,6 +266,19 @@ class LibraryPersistenceManager {
     if (!currentId) return null;
 
     return this.libraries.get(currentId) || null;
+  }
+
+  // Set a library as current
+  setCurrentLibrary(libraryPath: string): void {
+    const libraryId = this.generateLibraryId(libraryPath);
+    const library = this.libraries.get(libraryId);
+
+    if (library) {
+      localStorage.setItem(STORAGE_KEYS.CURRENT_LIBRARY, libraryId);
+      console.log(`Set library "${library.name}" as current`);
+    } else {
+      console.warn(`Cannot set library as current - library not found: ${libraryPath}`);
+    }
   }
 
   // Remove library from cache

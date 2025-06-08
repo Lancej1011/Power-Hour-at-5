@@ -19,6 +19,7 @@ import {
   FormControlLabel,
   TextField,
   Divider,
+  CircularProgress,
 } from '@mui/material';
 import LibraryMusicIcon from '@mui/icons-material/LibraryMusic';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -45,47 +46,79 @@ interface LibrarySong {
   duration?: number;
   bpm?: number;
   albumArt?: string;
+  fileSize?: number;
+  lastModified?: number;
   tags?: string[];
+  // Library information (added when loading from multiple libraries)
+  libraryPath?: string;
+  libraryName?: string;
 }
 
 interface LibraryManagerProps {
   open: boolean;
   onClose: () => void;
   onSelectLibrary: (libraryPath: string) => void;
-  onAddNewLibrary: () => void;
+  onAddLibraryFolder: (folderPath: string) => Promise<boolean>;
   currentLibraryPath?: string;
   songs?: LibrarySong[];
   onEnhanceMetadata?: (songs: LibrarySong[], enhancements: string[]) => Promise<void>;
+  libraryLoading?: boolean;
+  allLibraries?: any[];
+  onRefreshAllLibraries?: () => void;
+  onRemoveLibrary?: (libraryPath: string) => void;
+  onRefreshLibrary?: (libraryPath: string) => void;
 }
 
 const LibraryManager: React.FC<LibraryManagerProps> = ({
   open,
   onClose,
   onSelectLibrary,
-  onAddNewLibrary,
+  onAddLibraryFolder,
   currentLibraryPath,
   songs = [],
   onEnhanceMetadata,
+  libraryLoading = false,
+  allLibraries = [],
+  onRefreshAllLibraries,
+  onRemoveLibrary,
+  onRefreshLibrary,
 }) => {
-  const [libraries, setLibraries] = useState<any[]>([]);
   const [settings, setSettings] = useState<any>({});
   const [editingLibrary, setEditingLibrary] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [metadataEnhancerOpen, setMetadataEnhancerOpen] = useState(false);
+  const [isAddingLibrary, setIsAddingLibrary] = useState(false);
   const persistenceManager = LibraryPersistenceManager.getInstance();
+
+  // Use allLibraries from props, fallback to persistence manager if not provided
+  const libraries = allLibraries.length > 0 ? allLibraries : persistenceManager.getAllLibraries();
+
+  console.log('LibraryManager: allLibraries prop:', allLibraries.length, allLibraries);
+  console.log('LibraryManager: final libraries:', libraries.length, libraries);
+  console.log('LibraryManager: persistenceManager.getAllLibraries():', persistenceManager.getAllLibraries().length, persistenceManager.getAllLibraries());
 
   useEffect(() => {
     if (open) {
-      loadLibraries();
       loadSettings();
-    }
-  }, [open]);
+      // Refresh all libraries when dialog opens
+      if (onRefreshAllLibraries) {
+        onRefreshAllLibraries();
+      }
 
-  const loadLibraries = () => {
-    const allLibraries = persistenceManager.getAllLibraries();
-    setLibraries(allLibraries);
-  };
+      // Debug: Check localStorage directly
+      console.log('LibraryManager: localStorage libraries:', localStorage.getItem('power_hour_libraries'));
+      console.log('LibraryManager: localStorage current:', localStorage.getItem('power_hour_current_library'));
+    }
+  }, [open, onRefreshAllLibraries]);
+
+  // Refresh when library loading completes (indicates a new library was added)
+  useEffect(() => {
+    if (open && !libraryLoading && onRefreshAllLibraries) {
+      console.log('Library Manager: Library loading completed, refreshing libraries list');
+      onRefreshAllLibraries();
+    }
+  }, [open, libraryLoading, onRefreshAllLibraries]);
 
   const loadSettings = () => {
     const currentSettings = persistenceManager.getSettings();
@@ -99,15 +132,65 @@ const LibraryManager: React.FC<LibraryManagerProps> = ({
 
   const handleDeleteLibrary = (libraryPath: string) => {
     if (window.confirm('Are you sure you want to remove this library from cache? This will not delete your music files.')) {
-      persistenceManager.removeLibrary(libraryPath);
-      loadLibraries();
+      if (onRemoveLibrary) {
+        // Use the new context method which handles switching libraries properly
+        onRemoveLibrary(libraryPath);
+      } else {
+        // Fallback to direct persistence manager call
+        persistenceManager.removeLibrary(libraryPath);
+        if (onRefreshAllLibraries) {
+          onRefreshAllLibraries();
+        }
+      }
     }
   };
 
   const handleRefreshLibrary = (libraryPath: string) => {
-    // This would trigger a refresh of the specific library
-    onSelectLibrary(libraryPath);
-    onClose();
+    if (onRefreshLibrary) {
+      // Use the new context method which properly refreshes the library
+      onRefreshLibrary(libraryPath);
+    } else {
+      // Fallback to selecting the library (which will trigger a refresh)
+      onSelectLibrary(libraryPath);
+      onClose();
+    }
+  };
+
+  const handleAddNewLibrary = async () => {
+    console.log('Library Manager: Starting to add new library');
+    setIsAddingLibrary(true);
+
+    try {
+      // Open folder selection dialog
+      if (!window.electronAPI) {
+        console.error('Electron API not available');
+        return;
+      }
+
+      const selectedFolder = await window.electronAPI.selectLibraryFolder();
+      console.log('Library Manager: Selected folder:', selectedFolder);
+
+      if (selectedFolder) {
+        // Add the library using the new addLibraryFolder function
+        const success = await onAddLibraryFolder(selectedFolder);
+
+        if (success) {
+          console.log('Library Manager: Successfully added new library');
+          // Refresh libraries list
+          if (onRefreshAllLibraries) {
+            onRefreshAllLibraries();
+          }
+        } else {
+          console.log('Library Manager: Failed to add library or library already exists');
+        }
+      } else {
+        console.log('Library Manager: User cancelled folder selection');
+      }
+    } catch (error) {
+      console.error('Library Manager: Error adding new library:', error);
+    } finally {
+      setIsAddingLibrary(false);
+    }
   };
 
   const handleEditLibrary = (library: any) => {
@@ -120,7 +203,9 @@ const LibraryManager: React.FC<LibraryManagerProps> = ({
       const library = libraries.find(lib => lib.id === editingLibrary);
       if (library) {
         persistenceManager.updateLibraryMetadata(library.path, { name: editName.trim() });
-        loadLibraries();
+        if (onRefreshAllLibraries) {
+          onRefreshAllLibraries();
+        }
       }
     }
     setEditingLibrary(null);
@@ -130,6 +215,22 @@ const LibraryManager: React.FC<LibraryManagerProps> = ({
   const handleCancelEdit = () => {
     setEditingLibrary(null);
     setEditName('');
+  };
+
+  // Debug function to add a test library
+  const addTestLibrary = () => {
+    const testPath = `C:\\TestMusic\\Library${Date.now()}`;
+    const testSongs = [
+      { name: 'Test Song 1', path: `${testPath}\\song1.mp3`, title: 'Test Song 1', artist: 'Test Artist' },
+      { name: 'Test Song 2', path: `${testPath}\\song2.mp3`, title: 'Test Song 2', artist: 'Test Artist' }
+    ];
+
+    console.log('Adding test library:', testPath);
+    persistenceManager.saveLibrary(testPath, testSongs, `Test Library ${Date.now()}`, false);
+
+    if (onRefreshAllLibraries) {
+      onRefreshAllLibraries();
+    }
   };
 
   const handleSettingsChange = (key: string, value: any) => {
@@ -240,7 +341,9 @@ const LibraryManager: React.FC<LibraryManagerProps> = ({
               onClick={() => {
                 if (window.confirm('Clear all library caches? You will need to reload your libraries.')) {
                   persistenceManager.clearAllCaches();
-                  loadLibraries();
+                  if (onRefreshAllLibraries) {
+                    onRefreshAllLibraries();
+                  }
                 }
               }}
             >
@@ -252,27 +355,59 @@ const LibraryManager: React.FC<LibraryManagerProps> = ({
           <Box>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
               <Typography variant="body1">
-                Cached Libraries ({libraries.length})
+                Music Libraries ({libraries.length})
+                {currentLibraryPath && (
+                  <Typography variant="caption" display="block" color="text.secondary">
+                    Current: {currentLibraryPath.split(/[/\\]/).pop()}
+                  </Typography>
+                )}
               </Typography>
-              <Button
-                variant="contained"
-                startIcon={<AddIcon />}
-                onClick={onAddNewLibrary}
-                size="small"
-              >
-                Add Library
-              </Button>
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                <Button
+                  variant="outlined"
+                  startIcon={<RefreshIcon />}
+                  onClick={() => {
+                    console.log('Manual refresh triggered');
+                    if (onRefreshAllLibraries) {
+                      onRefreshAllLibraries();
+                    }
+                  }}
+                  size="small"
+                >
+                  Refresh
+                </Button>
+                <Button
+                  variant="outlined"
+                  color="secondary"
+                  onClick={addTestLibrary}
+                  size="small"
+                >
+                  Add Test
+                </Button>
+                <Button
+                  variant="contained"
+                  startIcon={isAddingLibrary ? <CircularProgress size={16} /> : <AddIcon />}
+                  onClick={handleAddNewLibrary}
+                  size="small"
+                  disabled={isAddingLibrary}
+                >
+                  {isAddingLibrary ? 'Adding Library...' : 'Add Library'}
+                </Button>
+              </Box>
             </Box>
 
             {libraries.length === 0 ? (
               <Box sx={{ textAlign: 'center', py: 4 }}>
                 <LibraryMusicIcon sx={{ fontSize: 48, color: 'text.secondary', mb: 2 }} />
                 <Typography variant="body1" color="text.secondary" gutterBottom>
-                  No libraries cached yet
+                  {isAddingLibrary || libraryLoading ? 'Adding library...' : 'No libraries cached yet'}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  Add a library to get started
+                  {isAddingLibrary || libraryLoading ? 'Please wait while we scan your music folder and all its subfolders' : 'Click "Add Library" to select a folder containing your music files. All subfolders will be scanned automatically.'}
                 </Typography>
+                {(isAddingLibrary || libraryLoading) && (
+                  <CircularProgress sx={{ mt: 2 }} />
+                )}
               </Box>
             ) : (
               <List>
@@ -318,22 +453,14 @@ const LibraryManager: React.FC<LibraryManagerProps> = ({
                         )
                       }
                       secondary={
-                        <Box>
-                          <Typography variant="caption" display="block">
+                        <React.Fragment>
+                          <Typography variant="caption" display="block" component="span">
                             📁 {library.path}
                           </Typography>
-                          <Box sx={{ display: 'flex', gap: 2, mt: 0.5 }}>
-                            <Typography variant="caption">
-                              🎵 {library.songCount} songs
-                            </Typography>
-                            <Typography variant="caption">
-                              💾 {formatFileSize(library.totalSize)}
-                            </Typography>
-                            <Typography variant="caption">
-                              🕒 {formatDate(library.lastScanned)}
-                            </Typography>
-                          </Box>
-                        </Box>
+                          <Typography variant="caption" component="span" sx={{ display: 'block', mt: 0.5 }}>
+                            🎵 {library.songCount} songs • 💾 {formatFileSize(library.totalSize)} • 🕒 {formatDate(library.lastScanned)}
+                          </Typography>
+                        </React.Fragment>
                       }
                     />
 
@@ -412,14 +539,9 @@ const LibraryManager: React.FC<LibraryManagerProps> = ({
           )}
         </Box>
 
-        {/* Right side - Close and Add Library buttons */}
+        {/* Right side - Close button */}
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button onClick={onClose}>Close</Button>
-          {!showSettings && (
-            <Button onClick={onAddNewLibrary} variant="contained">
-              Add New Library
-            </Button>
-          )}
         </Box>
       </DialogActions>
 

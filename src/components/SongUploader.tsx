@@ -80,7 +80,7 @@ import LoadingSkeleton from './LoadingSkeleton';
 import QuickFilters from './QuickFilters';
 import MetadataEnhancer from './MetadataEnhancer';
 
-import LibraryManager from './LibraryManager';
+import ModernLibraryManager from './ModernLibraryManager';
 import ModernAppHeader from './ModernAppHeader';
 import ModernNavigation, { defaultTabs } from './ModernNavigation';
 import ModernCard from './ModernCard';
@@ -150,6 +150,10 @@ interface LibrarySong {
   albumArt?: string;
   fileSize?: number;
   lastModified?: number;
+  tags?: string[];
+  // Library information (added when loading from multiple libraries)
+  libraryPath?: string;
+  libraryName?: string;
 }
 
 interface SongUploaderProps {
@@ -298,6 +302,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     selectedSongs,
     recentlyPlayed,
     favoriteTracks,
+    allLibraries,
     loadLibrarySongs,
     setLibraryFolder,
     setLibraryPlayingIndex,
@@ -310,6 +315,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     toggleFavorite,
     selectLibrary,
     chooseLibraryFolder,
+    refreshAllLibraries,
   } = library;
 
   // Debounced search for better performance
@@ -2190,6 +2196,10 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
             // For tags, sort by the first tag or empty string
             aVal = (Array.isArray(a.tags) && a.tags.length > 0 ? a.tags[0] : '').toLowerCase();
             bVal = (Array.isArray(b.tags) && b.tags.length > 0 ? b.tags[0] : '').toLowerCase();
+          } else if (field === 'library') {
+            // For library, sort by library name
+            aVal = (a.libraryName || 'Default').toLowerCase();
+            bVal = (b.libraryName || 'Default').toLowerCase();
           } else {
             aVal = (a[field] || '').toLowerCase();
             bVal = (b[field] || '').toLowerCase();
@@ -2494,9 +2504,15 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
     await selectLibrary(libraryPath);
   }, [selectLibrary]);
 
-  const handleAddNewLibrary = React.useCallback(() => {
-    setLibraryManagerOpen(false);
-    chooseLibraryFolder();
+  const handleAddNewLibrary = React.useCallback(async () => {
+    try {
+      // Don't close the dialog immediately - let user see the process
+      await chooseLibraryFolder();
+      // The Library Manager will automatically refresh its list when the context updates
+    } catch (error) {
+      console.error('Error adding new library:', error);
+      // Keep the dialog open so user can try again
+    }
   }, [chooseLibraryFolder]);
 
   // Library dropdown menu handlers
@@ -4835,15 +4851,20 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
         onEnhanceMetadata={handleEnhanceMetadata}
       />
 
-      {/* Library Manager Dialog */}
-      <LibraryManager
+      {/* Modern Library Manager Dialog */}
+      <ModernLibraryManager
         open={libraryManagerOpen}
         onClose={() => setLibraryManagerOpen(false)}
         onSelectLibrary={handleSelectLibrary}
-        onAddNewLibrary={handleAddNewLibrary}
+        onAddLibraryFolder={library.addLibraryFolder}
         currentLibraryPath={libraryFolder || undefined}
         songs={librarySongs}
         onEnhanceMetadata={handleEnhanceMetadata}
+        libraryLoading={libraryLoading}
+        allLibraries={allLibraries}
+        onRefreshAllLibraries={refreshAllLibraries}
+        onRemoveLibrary={library.removeLibrary}
+        onRefreshLibrary={library.refreshLibrary}
       />
     </div>
   );

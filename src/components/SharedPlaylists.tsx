@@ -32,6 +32,7 @@ import {
   NewReleases as NewIcon,
   Recommend as FeaturedIcon,
   Add as AddIcon,
+  Person as PersonIcon,
 } from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
 import {
@@ -43,6 +44,8 @@ import {
   getAllTags,
   getAllCreators,
 } from '../utils/sharedPlaylistUtils';
+import { authService } from '../services/authService';
+import { firebasePlaylistService } from '../services/firebasePlaylistService';
 import { recordPlaylistDownload } from '../utils/playlistRating';
 import { importPlaylistByCode } from '../utils/playlistImport';
 import SharedPlaylistCard from './SharedPlaylistCard';
@@ -50,6 +53,7 @@ import SharedPlaylistCard from './SharedPlaylistCard';
 const SharedPlaylists: React.FC = () => {
   const theme = useTheme();
   const [playlists, setPlaylists] = useState<SharedPlaylist[]>([]);
+  const [userPlaylists, setUserPlaylists] = useState<SharedPlaylist[]>([]);
   const [filteredPlaylists, setFilteredPlaylists] = useState<SharedPlaylist[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<PlaylistCategory>('featured');
@@ -63,26 +67,149 @@ const SharedPlaylists: React.FC = () => {
   const [importCode, setImportCode] = useState('');
   const [importLoading, setImportLoading] = useState(false);
   const [importError, setImportError] = useState('');
+  const [isAuthenticated, setIsAuthenticated] = useState(authService.isAuthenticated());
+  const [showMyPlaylists, setShowMyPlaylists] = useState(false);
 
   // Get available filter options
   const availableTags = useMemo(() => getAllTags(), [playlists]);
   const availableCreators = useMemo(() => getAllCreators(), [playlists]);
 
-  // Load playlists on component mount
+  // Load playlists on component mount and when category changes
   useEffect(() => {
     loadPlaylists();
+  }, [selectedCategory]);
+
+  // Debug function - expose to window for testing
+  useEffect(() => {
+    (window as any).debugCommunity = {
+      createTestPlaylist: async () => {
+        if (!authService.isAuthenticated()) {
+          await authService.autoSignIn();
+        }
+
+        const testPlaylist = {
+          id: `test_playlist_${Date.now()}`,
+          name: 'Test Shared Playlist',
+          clips: [
+            {
+              id: 'test_clip_1',
+              videoId: 'dQw4w9WgXcQ',
+              title: 'Rick Astley - Never Gonna Give You Up',
+              artist: 'Rick Astley',
+              startTime: 0,
+              duration: 60,
+              thumbnail: 'https://img.youtube.com/vi/dQw4w9WgXcQ/medium.jpg'
+            }
+          ],
+          date: new Date().toISOString(),
+          isPublic: true,
+          shareCode: `TEST${Math.random().toString(36).substr(2, 4).toUpperCase()}`,
+          creator: 'TestUser',
+          description: 'A test playlist for debugging owner actions',
+          rating: 0,
+          downloadCount: 0,
+          tags: ['test', 'debug'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          version: 1,
+          originalPlaylistId: `test_playlist_${Date.now()}`
+        };
+
+        try {
+          const result = await firebasePlaylistService.sharePlaylist(testPlaylist);
+          console.log('✅ Test playlist created:', result);
+          loadPlaylists();
+          return result;
+        } catch (error) {
+          console.error('❌ Error creating test playlist:', error);
+          throw error;
+        }
+      },
+      checkAuth: () => {
+        console.log('Auth status:', authService.isAuthenticated());
+        console.log('Current user:', authService.getCurrentUser());
+      },
+      checkPlaylists: () => {
+        console.log('Community playlists:', playlists);
+        console.log('User playlists:', userPlaylists);
+
+        // Check if playlists have creatorId field
+        playlists.forEach(playlist => {
+          console.log(`Playlist "${playlist.name}" (${playlist.id}):`, {
+            hasCreatorId: 'creatorId' in playlist,
+            creatorId: (playlist as any).creatorId,
+            creator: playlist.creator
+          });
+        });
+      },
+      fixPlaylistOwnership: async () => {
+        // Add creatorId to playlists that don't have it
+        if (!authService.isAuthenticated()) {
+          await authService.autoSignIn();
+        }
+
+        const currentUser = authService.getCurrentUser();
+        if (!currentUser) {
+          console.error('Not authenticated');
+          return;
+        }
+
+        console.log('🔧 Fixing playlist ownership for user:', currentUser.uid);
+
+        // Get all playlists and add creatorId to those created by current user
+        for (const playlist of playlists) {
+          if (!(playlist as any).creatorId) {
+            console.log('🔧 Adding creatorId to playlist:', playlist.name);
+            try {
+              await firebasePlaylistService.updatePlaylist(playlist.id, {
+                creatorId: currentUser.uid
+              });
+              console.log('✅ Updated playlist:', playlist.name);
+            } catch (error) {
+              console.error('❌ Error updating playlist:', playlist.name, error);
+            }
+          }
+        }
+
+        loadPlaylists(); // Reload after fixing
+      }
+    };
+  }, [playlists, userPlaylists]);
+
+
+
+  // Set up auth state listener
+  useEffect(() => {
+    const handleAuthChange = (user: any) => {
+      setIsAuthenticated(!!user);
+      // Reload playlists when auth state changes
+      if (user) {
+        loadPlaylists();
+      }
+    };
+
+    authService.addAuthStateListener(handleAuthChange);
+
+    return () => {
+      authService.removeAuthStateListener(handleAuthChange);
+    };
   }, []);
 
   // Filter playlists when filters change
   useEffect(() => {
     applyFilters();
-  }, [playlists, selectedCategory, searchQuery, selectedTags, selectedCreator, sortBy, sortOrder, minRating]);
+  }, [playlists, userPlaylists, selectedCategory, searchQuery, selectedTags, selectedCreator, sortBy, sortOrder, minRating]);
 
-  const loadPlaylists = () => {
+  const loadPlaylists = async () => {
     setLoading(true);
     try {
-      // Load shared playlists from localStorage only
-      let loadedPlaylists = getSharedPlaylists();
+      // Auto sign-in if Firebase is available and user is not authenticated
+      if (!authService.isAuthenticated()) {
+        await authService.autoSignIn();
+      }
+
+      // Load shared playlists using hybrid approach
+      let loadedPlaylists = await getSharedPlaylists(selectedCategory);
 
       // Filter out any demo playlists that might still exist
       loadedPlaylists = loadedPlaylists.filter(playlist =>
@@ -91,6 +218,14 @@ const SharedPlaylists: React.FC = () => {
       );
 
       setPlaylists(loadedPlaylists);
+
+      // Load user's own playlists if authenticated
+      if (authService.isAuthenticated()) {
+        const userOwnedPlaylists = await firebasePlaylistService.getUserPlaylists();
+        setUserPlaylists(userOwnedPlaylists);
+      } else {
+        setUserPlaylists([]);
+      }
     } catch (error) {
       console.error('Error loading shared playlists:', error);
     } finally {
@@ -99,8 +234,35 @@ const SharedPlaylists: React.FC = () => {
   };
 
   const applyFilters = () => {
+    // Use user playlists for "my-playlists" category, otherwise use public playlists
+    let sourcePlaylist = selectedCategory === 'my-playlists' ? userPlaylists : playlists;
+
+    // For "my-playlists", ensure we only show playlists owned by the current user
+    // and avoid duplicates by filtering out any that appear in both arrays
+    if (selectedCategory === 'my-playlists') {
+      sourcePlaylist = userPlaylists;
+    } else {
+      // For community playlists, exclude user's own playlists to avoid duplicates
+      const currentUser = authService.getCurrentUser();
+      if (currentUser) {
+        sourcePlaylist = playlists.filter(playlist =>
+          !userPlaylists.some(userPlaylist => userPlaylist.id === playlist.id)
+        );
+      } else {
+        sourcePlaylist = playlists;
+      }
+    }
+
+    // Debug logging to understand duplicate issues
+    console.log('🔍 Filtering Debug:', {
+      selectedCategory,
+      sourcePlaylistCount: sourcePlaylist.length,
+      sourcePlaylistIds: sourcePlaylist.map(p => p.id),
+      duplicateIds: sourcePlaylist.map(p => p.id).filter((id, index, arr) => arr.indexOf(id) !== index)
+    });
+
     const filters: SharedPlaylistFilters = {
-      category: selectedCategory,
+      category: selectedCategory === 'my-playlists' ? 'new' : selectedCategory, // Treat my-playlists as 'new' for filtering
       searchQuery: searchQuery || undefined,
       tags: selectedTags.length > 0 ? selectedTags : undefined,
       creator: selectedCreator || undefined,
@@ -109,21 +271,74 @@ const SharedPlaylists: React.FC = () => {
       sortOrder,
     };
 
-    const filtered = filterSharedPlaylists(playlists, filters);
-    setFilteredPlaylists(filtered);
+    const filtered = filterSharedPlaylists(sourcePlaylist, filters);
+
+    // Remove any potential duplicates based on ID
+    const uniqueFiltered = filtered.filter((playlist, index, arr) =>
+      arr.findIndex(p => p.id === playlist.id) === index
+    );
+
+    console.log('🔍 Filter Results:', {
+      beforeDedup: filtered.length,
+      afterDedup: uniqueFiltered.length,
+      removedDuplicates: filtered.length - uniqueFiltered.length
+    });
+
+    setFilteredPlaylists(uniqueFiltered);
   };
 
-  const handleImport = (playlist: SharedPlaylist) => {
-    // Record the download
-    recordPlaylistDownload(playlist.id);
-    
-    // Show success message (you might want to use a snackbar here)
-    console.log(`Successfully imported playlist: ${playlist.name}`);
+  const handleImport = async (playlist: SharedPlaylist) => {
+    try {
+      // Use the proper import function that converts to regular YouTube playlist
+      const result = await importPlaylistByCode(playlist.shareCode);
+
+      if (result.success) {
+        console.log(`✅ Successfully imported playlist: ${playlist.name}`);
+        console.log(`✅ Playlist saved as regular YouTube playlist`);
+        // You might want to show a success snackbar here
+      } else {
+        console.error(`❌ Failed to import playlist: ${result.message}`);
+        // You might want to show an error snackbar here
+      }
+    } catch (error) {
+      console.error('❌ Error importing playlist:', error);
+    }
   };
 
   const handlePreview = (playlist: SharedPlaylist) => {
     // This would open a preview dialog or navigate to a preview page
     console.log(`Previewing playlist: ${playlist.name}`);
+  };
+
+  const handlePlaylistUpdate = (updatedPlaylist: SharedPlaylist) => {
+    // Update in user playlists
+    setUserPlaylists(prev =>
+      prev.map(p => p.id === updatedPlaylist.id ? updatedPlaylist : p)
+    );
+
+    // Update in main playlists if it's public
+    if (updatedPlaylist.isPublic) {
+      setPlaylists(prev =>
+        prev.map(p => p.id === updatedPlaylist.id ? updatedPlaylist : p)
+      );
+    } else {
+      // Remove from main playlists if it became private
+      setPlaylists(prev => prev.filter(p => p.id !== updatedPlaylist.id));
+    }
+
+    // Refresh filters
+    applyFilters();
+  };
+
+  const handlePlaylistDelete = (playlistId: string) => {
+    // Remove from user playlists
+    setUserPlaylists(prev => prev.filter(p => p.id !== playlistId));
+
+    // Remove from main playlists
+    setPlaylists(prev => prev.filter(p => p.id !== playlistId));
+
+    // Refresh filters
+    applyFilters();
   };
 
   const clearFilters = () => {
@@ -150,7 +365,8 @@ const SharedPlaylists: React.FC = () => {
       if (result.success) {
         setImportDialogOpen(false);
         setImportCode('');
-        console.log('Successfully imported playlist:', result.message);
+        console.log('✅ Successfully imported playlist:', result.message);
+        console.log('✅ Playlist saved as regular YouTube playlist and should appear on Playlists page');
         // You might want to show a success snackbar here
       } else {
         setImportError(result.message);
@@ -169,7 +385,10 @@ const SharedPlaylists: React.FC = () => {
     { value: 'highly-rated', label: 'Highly Rated', icon: <StarIcon /> },
     { value: 'trending', label: 'Trending', icon: <TrendingIcon /> },
     { value: 'new', label: 'New', icon: <NewIcon /> },
+    ...(isAuthenticated ? [{ value: 'my-playlists', label: 'My Playlists', icon: <PersonIcon /> }] : []),
   ];
+
+
 
   if (loading) {
     return (
@@ -189,6 +408,15 @@ const SharedPlaylists: React.FC = () => {
         <Typography variant="body1" color="text.secondary">
           Discover and import amazing Power Hour playlists created by the community
         </Typography>
+
+        {/* Authentication and playlist status */}
+        <Box sx={{ mt: 2, p: 2, bgcolor: 'background.paper', borderRadius: 1, border: 1, borderColor: 'divider' }}>
+          <Typography variant="body2" color="text.secondary">
+            Status: {isAuthenticated ? '✅ Authenticated' : '❌ Not authenticated'} |
+            Community Playlists: {playlists.length} |
+            Your Playlists: {userPlaylists.length}
+          </Typography>
+        </Box>
       </Box>
 
       {/* Category Tabs */}
@@ -226,7 +454,7 @@ const SharedPlaylists: React.FC = () => {
         
         <Grid container spacing={2} alignItems="center">
           {/* Search */}
-          <Grid item xs={12} md={4}>
+          <Grid size={{ xs: 12, md: 4 }}>
             <TextField
               fullWidth
               label="Search playlists"
@@ -243,7 +471,7 @@ const SharedPlaylists: React.FC = () => {
           </Grid>
 
           {/* Tags */}
-          <Grid item xs={12} md={3}>
+          <Grid size={{ xs: 12, md: 3 }}>
             <Autocomplete
               multiple
               options={availableTags}
@@ -261,7 +489,7 @@ const SharedPlaylists: React.FC = () => {
           </Grid>
 
           {/* Creator */}
-          <Grid item xs={12} md={2}>
+          <Grid size={{ xs: 12, md: 2 }}>
             <Autocomplete
               options={availableCreators}
               value={selectedCreator}
@@ -273,7 +501,7 @@ const SharedPlaylists: React.FC = () => {
           </Grid>
 
           {/* Sort */}
-          <Grid item xs={12} md={2}>
+          <Grid size={{ xs: 12, md: 2 }}>
             <FormControl fullWidth>
               <InputLabel>Sort by</InputLabel>
               <Select
@@ -290,7 +518,7 @@ const SharedPlaylists: React.FC = () => {
           </Grid>
 
           {/* Clear filters */}
-          <Grid item xs={12} md={1}>
+          <Grid size={{ xs: 12, md: 1 }}>
             <Button
               variant="outlined"
               onClick={clearFilters}
@@ -306,21 +534,28 @@ const SharedPlaylists: React.FC = () => {
       {/* Results */}
       {filteredPlaylists.length === 0 ? (
         <Alert severity="info" sx={{ mb: 3 }}>
-          No playlists found matching your criteria. Try adjusting your filters.
+          {selectedCategory === 'my-playlists'
+            ? 'You haven\'t created any playlists yet. Share a playlist to see it here!'
+            : 'No playlists found matching your criteria. Try adjusting your filters.'
+          }
         </Alert>
       ) : (
         <>
           <Typography variant="h6" gutterBottom>
-            {filteredPlaylists.length} playlist{filteredPlaylists.length !== 1 ? 's' : ''} found
+            {selectedCategory === 'my-playlists' ? 'Your Playlists' : 'Community Playlists'}
+            ({filteredPlaylists.length} playlist{filteredPlaylists.length !== 1 ? 's' : ''})
           </Typography>
-          
+
           <Grid container spacing={3}>
-            {filteredPlaylists.map((playlist) => (
-              <Grid item xs={12} sm={6} md={4} lg={3} key={playlist.id}>
+            {filteredPlaylists.map((playlist, index) => (
+              <Grid key={`${selectedCategory}-${playlist.id}-${index}`} size={{ xs: 12, sm: 6, md: 4, lg: 3 }}>
                 <SharedPlaylistCard
                   playlist={playlist}
                   onImport={handleImport}
                   onPreview={handlePreview}
+                  onUpdate={handlePlaylistUpdate}
+                  onDelete={handlePlaylistDelete}
+                  showOwnerActions={selectedCategory === 'my-playlists'} // Only show owner actions in "My Playlists" tab
                 />
               </Grid>
             ))}

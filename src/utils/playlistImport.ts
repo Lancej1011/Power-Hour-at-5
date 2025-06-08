@@ -1,5 +1,9 @@
 import { YouTubePlaylist, YouTubeClip, saveYouTubePlaylist, generatePlaylistId } from './youtubeUtils';
-import { SharedPlaylist, getSharedPlaylistByCode } from './sharedPlaylistUtils';
+import {
+  SharedPlaylist,
+  getSharedPlaylistByCode,
+  importPlaylistByCode as hybridImportPlaylistByCode,
+} from './sharedPlaylistUtils';
 import { recordPlaylistDownload } from './playlistRating';
 
 // Import result interface
@@ -49,29 +53,21 @@ const convertSharedToRegular = (sharedPlaylist: SharedPlaylist): YouTubePlaylist
   };
 };
 
-// Import playlist by share code
+// Import playlist by share code (uses hybrid approach)
 export const importPlaylistByCode = async (shareCode: string): Promise<ImportResult> => {
   try {
-    // Validate share code format
-    if (!shareCode || typeof shareCode !== 'string' || shareCode.length !== 8) {
-      return {
-        success: false,
-        message: 'Invalid share code format. Share codes must be 8 characters long.',
-      };
-    }
+    // Use the hybrid import function from sharedPlaylistUtils
+    const hybridResult = await hybridImportPlaylistByCode(shareCode);
 
-    // Find playlist by share code
-    const sharedPlaylist = getSharedPlaylistByCode(shareCode.toUpperCase());
-    
-    if (!sharedPlaylist) {
+    if (!hybridResult.success || !hybridResult.playlist) {
       return {
         success: false,
-        message: 'Playlist not found. Please check the share code and try again.',
+        message: hybridResult.message || 'Failed to import playlist.',
       };
     }
 
     // Validate playlist
-    if (!validateSharedPlaylist(sharedPlaylist)) {
+    if (!validateSharedPlaylist(hybridResult.playlist)) {
       return {
         success: false,
         message: 'Invalid playlist data. The playlist may be corrupted.',
@@ -79,11 +75,11 @@ export const importPlaylistByCode = async (shareCode: string): Promise<ImportRes
     }
 
     // Convert to regular playlist
-    const regularPlaylist = convertSharedToRegular(sharedPlaylist);
+    const regularPlaylist = convertSharedToRegular(hybridResult.playlist);
 
     // Save the playlist
     const saveSuccess = saveYouTubePlaylist(regularPlaylist);
-    
+
     if (!saveSuccess) {
       return {
         success: false,
@@ -91,13 +87,10 @@ export const importPlaylistByCode = async (shareCode: string): Promise<ImportRes
       };
     }
 
-    // Record the download
-    recordPlaylistDownload(sharedPlaylist.id);
-
     return {
       success: true,
       playlist: regularPlaylist,
-      message: `Successfully imported "${sharedPlaylist.name}" with ${sharedPlaylist.clips.length} clips.`,
+      message: `Successfully imported "${hybridResult.playlist.name}" with ${hybridResult.playlist.clips.length} clips.`,
     };
   } catch (error) {
     console.error('Error importing playlist by code:', error);

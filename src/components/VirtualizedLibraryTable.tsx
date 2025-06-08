@@ -24,6 +24,9 @@ interface LibrarySong {
   genre?: string;
   year?: string;
   tags?: string[];
+  // Library information (added when loading from multiple libraries)
+  libraryPath?: string;
+  libraryName?: string;
 }
 
 interface LibraryTableProps {
@@ -34,8 +37,8 @@ interface LibraryTableProps {
   onSelectAll: () => void;
   onPlaySong: (song: LibrarySong, index: number) => void;
   onExtractClip: (song: LibrarySong) => void;
-  librarySort: { field: 'title' | 'artist' | 'album' | 'genre' | 'year' | 'tags'; direction: 'asc' | 'desc' };
-  onSortChange: (field: 'title' | 'artist' | 'album' | 'genre' | 'year' | 'tags') => void;
+  librarySort: { field: 'title' | 'artist' | 'album' | 'genre' | 'year' | 'library' | 'tags'; direction: 'asc' | 'desc' };
+  onSortChange: (field: 'title' | 'artist' | 'album' | 'genre' | 'year' | 'library' | 'tags') => void;
   favoriteTracks?: Set<string>;
   onToggleFavorite?: (songPath: string) => void;
   showWaveforms?: boolean;
@@ -253,6 +256,24 @@ const LibraryRow = memo(({
         width={columnWidths?.year ? `${columnWidths.year}px` : '10%'}
       />
 
+      {/* Library - show library name if available */}
+      <div style={{
+        width: columnWidths?.library ? `${columnWidths.library}px` : '15%',
+        padding: '8px 12px',
+        textAlign: 'left',
+        flexShrink: 0,
+        borderRight: `1px solid ${theme.divider}`,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        color: theme.textSecondary,
+        fontSize: '0.8rem',
+        display: 'flex',
+        alignItems: 'center'
+      }}>
+        {song.libraryName || 'Default'}
+      </div>
+
       {/* Tags - conditionally rendered */}
       {showTagsColumn && (
         <EditableCell
@@ -373,6 +394,7 @@ const LibraryTable: React.FC<LibraryTableProps> = ({
     album: 280,  // Increased from 250
     genre: 200,  // Increased from 180
     year: 120,   // Increased from 100
+    library: 180, // New library column
     tags: 220,   // Increased from 200
   };
 
@@ -672,6 +694,15 @@ const LibraryTable: React.FC<LibraryTableProps> = ({
           field="year"
           label="Year"
           width={currentColumnWidths.year}
+          sortField={librarySort.field}
+          sortDirection={librarySort.direction}
+          onSort={onSortChange}
+          onResize={onColumnResize}
+        />
+        <ResizableColumnHeader
+          field="library"
+          label="Library"
+          width={currentColumnWidths.library}
           sortField={librarySort.field}
           sortDirection={librarySort.direction}
           onSort={onSortChange}

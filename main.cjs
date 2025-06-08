@@ -395,15 +395,14 @@ ipcMain.handle('get-mix-file-path', async (event, mixName) => {
   return null;
 });
 
-// IPC: Select library folder
+// IPC: Select library folder (just returns the selected folder, doesn't set it as current)
 ipcMain.handle('select-library-folder', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
     properties: ['openDirectory']
   });
   if (!canceled && filePaths.length > 0) {
-    libraryFolder = filePaths[0];
-    saveLibraryFolder(libraryFolder);
-    return libraryFolder;
+    // Just return the selected folder, don't set it as current
+    return filePaths[0];
   }
   return null;
 });
@@ -412,6 +411,16 @@ ipcMain.handle('select-library-folder', async () => {
 ipcMain.handle('get-library-folder', () => {
   if (!libraryFolder) loadLibraryFolder();
   return libraryFolder;
+});
+
+// IPC: Set current library folder
+ipcMain.handle('set-library-folder', (event, folderPath) => {
+  libraryFolder = folderPath;
+  if (folderPath) {
+    saveLibraryFolder(folderPath);
+  }
+  console.log(`Library folder set to: ${folderPath}`);
+  return folderPath;
 });
 
 // Metadata cache to avoid re-parsing files
@@ -482,6 +491,8 @@ async function getAllAudioFilesWithMetadata(dir, progressCallback = null, cancel
             album: meta.album,
             genre: meta.genre,
             year: meta.year,
+            fileSize: stats.size,
+            lastModified: stats.mtime.getTime(),
           });
 
           processedCount++;
@@ -525,6 +536,30 @@ ipcMain.handle('list-library-audio', async (event) => {
       return [];
     }
     console.error('Error reading library folder:', err);
+    return [];
+  }
+});
+
+// IPC: List audio files in any specified folder (recursive, with metadata)
+ipcMain.handle('scan-folder-audio', async (event, folderPath) => {
+  if (!folderPath) return [];
+
+  // Reset cancel token for new operation
+  libraryCancelToken = { cancelled: false };
+
+  try {
+    const progressCallback = (progress) => {
+      event.sender.send('library-load-progress', progress);
+    };
+
+    console.log(`Scanning folder: ${folderPath}`);
+    return await getAllAudioFilesWithMetadata(folderPath, progressCallback, libraryCancelToken);
+  } catch (err) {
+    if (err.message === 'Operation cancelled') {
+      console.log('Folder scanning cancelled');
+      return [];
+    }
+    console.error('Error reading folder:', folderPath, err);
     return [];
   }
 });

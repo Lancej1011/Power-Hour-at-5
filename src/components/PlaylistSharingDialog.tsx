@@ -35,6 +35,8 @@ import {
   getUserProfile,
   updateUserProfile,
 } from '../utils/sharedPlaylistUtils';
+import { authService } from '../services/authService';
+import { firebasePlaylistService } from '../services/firebasePlaylistService';
 
 interface PlaylistSharingDialogProps {
   open: boolean;
@@ -59,19 +61,61 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
   const [isSharing, setIsSharing] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+  const [existingSharedPlaylist, setExistingSharedPlaylist] = useState<SharedPlaylist | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isRemoving, setIsRemoving] = useState(false);
 
-  // Load user profile on open
+  // Load user profile and check for existing shared version on open
   useEffect(() => {
     if (open && playlist) {
-      const userProfile = getUserProfile();
-      setUsername(userProfile.username);
-      setDescription('');
-      setTags([]);
-      setNewTag('');
-      setIsPublic(false);
-      setShareCode('');
-      setError('');
-      setSuccess(false);
+      const loadData = async () => {
+        const userProfile = getUserProfile();
+        setUsername(userProfile.username);
+        setError('');
+        setSuccess(false);
+        setIsEditing(false);
+        setIsRemoving(false);
+
+        // Check if this playlist is already shared
+        if (authService.isAuthenticated()) {
+          try {
+            const existingShared = await firebasePlaylistService.getSharedVersionOfPlaylist(playlist.id);
+            setExistingSharedPlaylist(existingShared);
+
+            if (existingShared) {
+              // Pre-fill form with existing data
+              setDescription(existingShared.description);
+              setTags(existingShared.tags);
+              setIsPublic(existingShared.isPublic);
+              setShareCode(existingShared.shareCode);
+              setIsEditing(true);
+            } else {
+              // Reset form for new sharing
+              setDescription('');
+              setTags([]);
+              setIsPublic(false);
+              setShareCode('');
+            }
+          } catch (error) {
+            console.error('Error checking for existing shared version:', error);
+            setExistingSharedPlaylist(null);
+            setDescription('');
+            setTags([]);
+            setIsPublic(false);
+            setShareCode('');
+          }
+        } else {
+          setExistingSharedPlaylist(null);
+          setDescription('');
+          setTags([]);
+          setIsPublic(false);
+          setShareCode('');
+        }
+
+        setNewTag('');
+      };
+
+      loadData();
     }
   }, [open, playlist]);
 
@@ -102,7 +146,7 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
     }
   };
 
-  // Share playlist
+  // Share or update playlist
   const handleShare = async () => {
     if (!playlist) return;
 
@@ -110,6 +154,11 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
     setError('');
 
     try {
+      // Auto sign-in if Firebase is available and user is not authenticated
+      if (!authService.isAuthenticated()) {
+        await authService.autoSignIn();
+      }
+
       // Validate inputs
       if (isPublic && !description.trim()) {
         setError('Description is required for public playlists');
@@ -129,32 +178,81 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
         return;
       }
 
-      // Create shared playlist
-      const sharedPlaylist = createSharedPlaylist(
-        playlist,
-        description.trim(),
-        tags
-      );
+      if (existingSharedPlaylist) {
+        // Update existing shared playlist
+        const updates = {
+          name: playlist.name,
+          description: description.trim(),
+          tags,
+          isPublic,
+          creator: username.trim(),
+          clips: playlist.clips, // Update clips in case the original playlist was modified
+        };
 
-      // Update with current settings
-      sharedPlaylist.isPublic = isPublic;
-      sharedPlaylist.creator = username.trim();
+        const updateSuccess = await firebasePlaylistService.updatePlaylist(existingSharedPlaylist.id, updates);
 
-      // Save to storage
-      const saveSuccess = saveSharedPlaylist(sharedPlaylist);
-      
-      if (saveSuccess) {
-        setShareCode(sharedPlaylist.shareCode);
-        setSuccess(true);
-        onSuccess?.(sharedPlaylist);
+        if (updateSuccess) {
+          setSuccess(true);
+          const updatedPlaylist = { ...existingSharedPlaylist, ...updates };
+          onSuccess?.(updatedPlaylist);
+        } else {
+          setError('Failed to update shared playlist');
+        }
       } else {
-        setError('Failed to save shared playlist');
+        // Create new shared playlist
+        const sharedPlaylist = createSharedPlaylist(
+          playlist,
+          description.trim(),
+          tags,
+          isPublic
+        );
+
+        // Update with current settings
+        sharedPlaylist.isPublic = isPublic;
+        sharedPlaylist.creator = username.trim();
+
+        // Save to storage (hybrid approach)
+        const saveSuccess = await saveSharedPlaylist(sharedPlaylist);
+
+        if (saveSuccess) {
+          setShareCode(sharedPlaylist.shareCode);
+          setSuccess(true);
+          onSuccess?.(sharedPlaylist);
+        } else {
+          setError('Failed to save shared playlist');
+        }
       }
     } catch (err) {
       setError('An error occurred while sharing the playlist');
       console.error('Error sharing playlist:', err);
     } finally {
       setIsSharing(false);
+    }
+  };
+
+  // Handle removing from community
+  const handleRemoveFromCommunity = async () => {
+    if (!existingSharedPlaylist) return;
+
+    setIsRemoving(true);
+    setError('');
+
+    try {
+      const success = await firebasePlaylistService.removeFromCommunity(existingSharedPlaylist.id);
+
+      if (success) {
+        setIsPublic(false);
+        setSuccess(true);
+        const updatedPlaylist = { ...existingSharedPlaylist, isPublic: false };
+        onSuccess?.(updatedPlaylist);
+      } else {
+        setError('Failed to remove playlist from community');
+      }
+    } catch (err) {
+      setError('An error occurred while removing the playlist from community');
+      console.error('Error removing from community:', err);
+    } finally {
+      setIsRemoving(false);
     }
   };
 
@@ -192,9 +290,9 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
             <ShareIcon sx={{ mr: 1 }} />
-            Share Playlist
+            {existingSharedPlaylist ? 'Manage Shared Playlist' : 'Share Playlist'}
           </Box>
-          <IconButton onClick={handleClose} disabled={isSharing}>
+          <IconButton onClick={handleClose} disabled={isSharing || isRemoving}>
             <CloseIcon />
           </IconButton>
         </Box>
@@ -255,6 +353,17 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
               <Typography variant="body2" color="text.secondary">
                 {playlist.clips.length} clips • Created {new Date(playlist.date).toLocaleDateString()}
               </Typography>
+
+              {/* Show existing shared status */}
+              {existingSharedPlaylist && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  <Typography variant="body2">
+                    This playlist is already shared with code: <strong>{existingSharedPlaylist.shareCode}</strong>
+                    <br />
+                    Status: {existingSharedPlaylist.isPublic ? 'Public (visible in community)' : 'Private (share code only)'}
+                  </Typography>
+                </Alert>
+              )}
             </Box>
 
             <Divider sx={{ mb: 3 }} />
@@ -362,16 +471,32 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
           </Button>
         ) : (
           <>
-            <Button onClick={handleClose} disabled={isSharing}>
+            <Button onClick={handleClose} disabled={isSharing || isRemoving}>
               Cancel
             </Button>
+
+            {/* Remove from community button (only for existing public playlists) */}
+            {existingSharedPlaylist && existingSharedPlaylist.isPublic && (
+              <Button
+                onClick={handleRemoveFromCommunity}
+                disabled={isSharing || isRemoving}
+                color="warning"
+                startIcon={<PrivateIcon />}
+              >
+                {isRemoving ? 'Removing...' : 'Remove from Community'}
+              </Button>
+            )}
+
             <Button
               onClick={handleShare}
               variant="contained"
-              disabled={isSharing}
+              disabled={isSharing || isRemoving}
               startIcon={<ShareIcon />}
             >
-              {isSharing ? 'Sharing...' : 'Share Playlist'}
+              {isSharing
+                ? (existingSharedPlaylist ? 'Updating...' : 'Sharing...')
+                : (existingSharedPlaylist ? 'Update Playlist' : 'Share Playlist')
+              }
             </Button>
           </>
         )}

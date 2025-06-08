@@ -12,7 +12,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Library folder handlers
   selectLibraryFolder: () => ipcRenderer.invoke('select-library-folder'),
   getLibraryFolder: () => ipcRenderer.invoke('get-library-folder'),
+  setLibraryFolder: (folderPath) => ipcRenderer.invoke('set-library-folder', folderPath),
   listLibraryAudio: () => ipcRenderer.invoke('list-library-audio'),
+  scanFolderAudio: (folderPath) => ipcRenderer.invoke('scan-folder-audio', folderPath),
   cancelLibraryLoading: () => ipcRenderer.invoke('cancel-library-loading'),
   onLibraryLoadProgress: (callback) => ipcRenderer.on('library-load-progress', callback),
   removeLibraryLoadProgressListener: (callback) => ipcRenderer.removeListener('library-load-progress', callback),

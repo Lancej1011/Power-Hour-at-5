@@ -46,7 +46,9 @@ interface ElectronAPI {
   // Library folder handlers
   selectLibraryFolder: () => Promise<string | null>;
   getLibraryFolder: () => Promise<string | null>;
+  setLibraryFolder: (folderPath: string) => Promise<string>;
   listLibraryAudio: () => Promise<any[]>;
+  scanFolderAudio: (folderPath: string) => Promise<any[]>;
   cancelLibraryLoading: () => Promise<boolean>;
   onLibraryLoadProgress: (callback: (event: any, progress: { processed: number; current: string }) => void) => void;
   removeLibraryLoadProgressListener: (callback: (event: any, progress: { processed: number; current: string }) => void) => void;

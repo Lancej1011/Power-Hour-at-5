@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Card,
   CardContent,
@@ -20,6 +20,10 @@ import {
   ListItemText,
   Avatar,
   Divider,
+  Menu,
+  MenuItem,
+  ListItemIcon,
+  CircularProgress,
 } from '@mui/material';
 import {
   Download as DownloadIcon,
@@ -29,33 +33,83 @@ import {
   MusicNote as MusicNoteIcon,
   Star as StarIcon,
   Visibility as ViewIcon,
+  ContentCopy as CopyIcon,
+  MoreVert as MoreVertIcon,
+  Edit as EditIcon,
+  Delete as DeleteIcon,
+  Public as PublicIcon,
+  Lock as PrivateIcon,
 } from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
-import { SharedPlaylist } from '../utils/sharedPlaylistUtils';
+import { SharedPlaylist, getUserProfile } from '../utils/sharedPlaylistUtils';
 import { getUserRating, ratePlaylist, hasUserDownloaded } from '../utils/playlistRating';
 import { saveYouTubePlaylist } from '../utils/youtubeUtils';
+import { firebasePlaylistService } from '../services/firebasePlaylistService';
+import { authService } from '../services/authService';
+import PlaylistEditDialog from './PlaylistEditDialog';
 
 interface SharedPlaylistCardProps {
   playlist: SharedPlaylist;
   onImport?: (playlist: SharedPlaylist) => void;
   onPreview?: (playlist: SharedPlaylist) => void;
+  onUpdate?: (playlist: SharedPlaylist) => void;
+  onDelete?: (playlistId: string) => void;
   showActions?: boolean;
+  showOwnerActions?: boolean;
 }
 
 const SharedPlaylistCard: React.FC<SharedPlaylistCardProps> = ({
   playlist,
   onImport,
   onPreview,
+  onUpdate,
+  onDelete,
   showActions = true,
+  showOwnerActions = false,
 }) => {
   const theme = useTheme();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [userRating, setUserRating] = useState(getUserRating(playlist.id)?.rating || 0);
   const [isDownloaded, setIsDownloaded] = useState(hasUserDownloaded(playlist.id));
+  const [isOwner, setIsOwner] = useState(false);
+  const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Check if current user owns this playlist
+  useEffect(() => {
+    const checkOwnership = async () => {
+      if (showOwnerActions && authService.isAuthenticated()) {
+        try {
+          // First try Firebase ownership check
+          const ownershipStatus = await firebasePlaylistService.isPlaylistOwner(playlist.id);
+
+          // If Firebase check fails, try fallback method using creator name
+          if (!ownershipStatus) {
+            const userProfile = getUserProfile();
+            const nameMatch = playlist.creator === userProfile.username;
+            setIsOwner(nameMatch);
+          } else {
+            setIsOwner(ownershipStatus);
+          }
+        } catch (error) {
+          console.error('❌ Error checking ownership:', error);
+          // Fallback to name-based check
+          const userProfile = getUserProfile();
+          const nameMatch = playlist.creator === userProfile.username;
+          setIsOwner(nameMatch);
+        }
+      } else {
+        setIsOwner(false);
+      }
+    };
+    checkOwnership();
+  }, [playlist.id, showOwnerActions]);
 
   // Get thumbnail from first clip or use default
-  const thumbnail = playlist.clips.length > 0 
-    ? playlist.clips[0].thumbnail 
+  const thumbnail = playlist.clips.length > 0
+    ? playlist.clips[0].thumbnail
     : playlist.imagePath || '/default-playlist-thumbnail.jpg';
 
   // Format duration
@@ -71,7 +125,94 @@ const SharedPlaylistCard: React.FC<SharedPlaylistCardProps> = ({
       const success = ratePlaylist(playlist.id, newValue);
       if (success) {
         setUserRating(newValue);
+        console.log(`✅ Successfully rated playlist "${playlist.name}" with ${newValue} stars`);
+      } else {
+        console.error('Failed to rate playlist');
       }
+    }
+  };
+
+  // Handle menu actions
+  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
+    setMenuAnchor(event.currentTarget);
+  };
+
+  const handleMenuClose = () => {
+    setMenuAnchor(null);
+  };
+
+  const handleEdit = () => {
+    setEditDialogOpen(true);
+    handleMenuClose();
+  };
+
+  const handleDeleteClick = () => {
+    setDeleteDialogOpen(true);
+    handleMenuClose();
+  };
+
+  const handleDeleteConfirm = async () => {
+    setIsDeleting(true);
+    try {
+      console.log('🗑️ Attempting to delete playlist:', {
+        id: playlist.id,
+        name: playlist.name,
+        shareCode: playlist.shareCode
+      });
+
+      const success = await firebasePlaylistService.deletePlaylist(playlist.id);
+
+      if (success) {
+        console.log('✅ Playlist deleted successfully');
+        if (onDelete) {
+          onDelete(playlist.id);
+        }
+      } else {
+        console.error('❌ Failed to delete playlist - service returned false');
+      }
+    } catch (error) {
+      console.error('❌ Error deleting playlist:', error);
+    } finally {
+      setIsDeleting(false);
+      setDeleteDialogOpen(false);
+    }
+  };
+
+  const handleRemoveFromCommunity = async () => {
+    try {
+      const success = await firebasePlaylistService.removeFromCommunity(playlist.id);
+      if (success && onUpdate) {
+        const updatedPlaylist = { ...playlist, isPublic: false };
+        onUpdate(updatedPlaylist);
+      }
+    } catch (error) {
+      console.error('Error removing from community:', error);
+    }
+    handleMenuClose();
+  };
+
+  const handlePlaylistUpdate = (updatedPlaylist: SharedPlaylist) => {
+    if (onUpdate) {
+      onUpdate(updatedPlaylist);
+    }
+    setEditDialogOpen(false);
+  };
+
+  // Handle copy share code
+  const handleCopyShareCode = async () => {
+    try {
+      await navigator.clipboard.writeText(playlist.shareCode);
+      // You could add a toast notification here if desired
+      console.log('Share code copied to clipboard');
+    } catch (error) {
+      console.error('Failed to copy share code:', error);
+      // Fallback for older browsers
+      const textArea = document.createElement('textarea');
+      textArea.value = playlist.shareCode;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
     }
   };
 
@@ -125,21 +266,84 @@ const SharedPlaylistCard: React.FC<SharedPlaylistCardProps> = ({
           position: 'relative',
         }}
       >
-        {/* Featured badge */}
-        {playlist.featured && (
-          <Chip
-            label="Featured"
-            size="small"
-            sx={{
-              position: 'absolute',
-              top: 8,
-              right: 8,
-              zIndex: 1,
-              backgroundColor: theme.palette.warning.main,
-              color: 'white',
-            }}
-          />
-        )}
+        {/* Header with badges and owner actions */}
+        <Box sx={{ position: 'relative' }}>
+          {/* Featured badge */}
+          {playlist.featured && (
+            <Chip
+              label="Featured"
+              size="small"
+              sx={{
+                position: 'absolute',
+                top: 8,
+                right: showOwnerActions && isOwner ? 48 : 8,
+                zIndex: 1,
+                backgroundColor: theme.palette.warning.main,
+                color: 'white',
+              }}
+            />
+          )}
+
+          {/* Privacy badge */}
+          {showOwnerActions && (
+            <Chip
+              icon={playlist.isPublic ? <PublicIcon /> : <PrivateIcon />}
+              label={playlist.isPublic ? 'Public' : 'Private'}
+              size="small"
+              sx={{
+                position: 'absolute',
+                top: playlist.featured ? 40 : 8,
+                right: isOwner ? 48 : 8,
+                zIndex: 1,
+                backgroundColor: playlist.isPublic
+                  ? theme.palette.success.main
+                  : theme.palette.grey[600],
+                color: 'white',
+              }}
+            />
+          )}
+
+          {/* Owner actions menu */}
+          {showOwnerActions && isOwner && (
+            <IconButton
+              size="small"
+              onClick={handleMenuOpen}
+              sx={{
+                position: 'absolute',
+                top: 8,
+                right: 8,
+                zIndex: 2,
+                backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                color: 'white',
+                '&:hover': {
+                  backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                },
+              }}
+            >
+              <MoreVertIcon />
+            </IconButton>
+          )}
+
+          {/* Debug: Show ownership status */}
+          {showOwnerActions && (
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 40,
+                left: 8,
+                zIndex: 2,
+                backgroundColor: isOwner ? 'rgba(0, 255, 0, 0.8)' : 'rgba(255, 0, 0, 0.8)',
+                color: 'white',
+                padding: '2px 4px',
+                fontSize: '10px',
+                borderRadius: 1,
+              }}
+            >
+              Owner: {isOwner ? 'YES' : 'NO'}
+            </Box>
+          )}
+
+        </Box>
 
         {/* Thumbnail */}
         <CardMedia
@@ -328,6 +532,35 @@ const SharedPlaylistCard: React.FC<SharedPlaylistCardProps> = ({
             </>
           )}
 
+          {/* Share Code */}
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="subtitle2" gutterBottom>
+              Share Code
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography
+                variant="body2"
+                sx={{
+                  fontFamily: 'monospace',
+                  backgroundColor: 'action.hover',
+                  padding: '4px 8px',
+                  borderRadius: 1,
+                  fontSize: '1.1em',
+                  fontWeight: 'bold'
+                }}
+              >
+                {playlist.shareCode}
+              </Typography>
+              <Tooltip title="Copy share code">
+                <IconButton size="small" onClick={handleCopyShareCode}>
+                  <CopyIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </Box>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
           {/* Stats */}
           <Box sx={{ display: 'flex', gap: 4, mb: 2 }}>
             <Box>
@@ -408,6 +641,79 @@ const SharedPlaylistCard: React.FC<SharedPlaylistCardProps> = ({
             startIcon={<DownloadIcon />}
           >
             {isDownloaded ? 'Downloaded' : 'Import Playlist'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Owner Actions Menu */}
+      <Menu
+        anchorEl={menuAnchor}
+        open={Boolean(menuAnchor)}
+        onClose={handleMenuClose}
+        transformOrigin={{ horizontal: 'right', vertical: 'top' }}
+        anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
+      >
+        <MenuItem onClick={handleEdit}>
+          <ListItemIcon>
+            <EditIcon fontSize="small" />
+          </ListItemIcon>
+          Edit Playlist
+        </MenuItem>
+
+        {/* Remove from community option (only for public playlists) */}
+        {playlist.isPublic && (
+          <MenuItem onClick={handleRemoveFromCommunity} sx={{ color: 'warning.main' }}>
+            <ListItemIcon>
+              <PrivateIcon fontSize="small" sx={{ color: 'warning.main' }} />
+            </ListItemIcon>
+            Remove from Community
+          </MenuItem>
+        )}
+
+        <MenuItem onClick={handleDeleteClick} sx={{ color: 'error.main' }}>
+          <ListItemIcon>
+            <DeleteIcon fontSize="small" sx={{ color: 'error.main' }} />
+          </ListItemIcon>
+          Delete Playlist
+        </MenuItem>
+      </Menu>
+
+      {/* Edit Dialog */}
+      <PlaylistEditDialog
+        open={editDialogOpen}
+        onClose={() => setEditDialogOpen(false)}
+        playlist={playlist}
+        onSuccess={handlePlaylistUpdate}
+      />
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={deleteDialogOpen}
+        onClose={() => setDeleteDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Delete Playlist</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Are you sure you want to delete "{playlist.name}"? This action cannot be undone.
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            This will also remove all ratings and download records associated with this playlist.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialogOpen(false)} disabled={isDeleting}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleDeleteConfirm}
+            color="error"
+            variant="contained"
+            disabled={isDeleting}
+            startIcon={isDeleting ? <CircularProgress size={16} /> : <DeleteIcon />}
+          >
+            {isDeleting ? 'Deleting...' : 'Delete'}
           </Button>
         </DialogActions>
       </Dialog>

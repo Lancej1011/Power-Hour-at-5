@@ -1,0 +1,226 @@
+import { 
+  signInAnonymously, 
+  signInWithPopup, 
+  GoogleAuthProvider,
+  User,
+  onAuthStateChanged,
+  signOut as firebaseSignOut
+} from 'firebase/auth';
+import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { auth, db, isFirebaseConfigured } from '../config/firebase';
+
+// User profile interface
+export interface UserProfile {
+  id: string;
+  username: string;
+  email?: string;
+  createdAt: any; // Firestore timestamp
+  isAnonymous: boolean;
+  lastLoginAt: any; // Firestore timestamp
+}
+
+export class AuthService {
+  private static instance: AuthService;
+  private currentUser: User | null = null;
+  private authStateListeners: ((user: User | null) => void)[] = [];
+
+  private constructor() {
+    // Set up auth state listener if Firebase is configured
+    if (auth) {
+      onAuthStateChanged(auth, (user) => {
+        this.currentUser = user;
+        this.notifyAuthStateListeners(user);
+      });
+    }
+  }
+
+  // Singleton pattern
+  public static getInstance(): AuthService {
+    if (!AuthService.instance) {
+      AuthService.instance = new AuthService();
+    }
+    return AuthService.instance;
+  }
+
+  // Check if Firebase is available
+  public isFirebaseAvailable(): boolean {
+    return isFirebaseConfigured() && !!auth && !!db;
+  }
+
+  // Sign in anonymously
+  public async signInAnonymously(): Promise<User | null> {
+    if (!this.isFirebaseAvailable()) {
+      console.warn('Firebase not available - cannot sign in anonymously');
+      return null;
+    }
+
+    try {
+      const result = await signInAnonymously(auth!);
+      await this.createOrUpdateUserProfile(result.user, true);
+      console.log('✅ Signed in anonymously');
+      return result.user;
+    } catch (error) {
+      console.error('❌ Error signing in anonymously:', error);
+      throw error;
+    }
+  }
+
+  // Sign in with Google
+  public async signInWithGoogle(): Promise<User | null> {
+    if (!this.isFirebaseAvailable()) {
+      console.warn('Firebase not available - cannot sign in with Google');
+      return null;
+    }
+
+    try {
+      const provider = new GoogleAuthProvider();
+      const result = await signInWithPopup(auth!, provider);
+      await this.createOrUpdateUserProfile(result.user, false);
+      console.log('✅ Signed in with Google');
+      return result.user;
+    } catch (error) {
+      console.error('❌ Error signing in with Google:', error);
+      throw error;
+    }
+  }
+
+  // Sign out
+  public async signOut(): Promise<void> {
+    if (!this.isFirebaseAvailable()) {
+      console.warn('Firebase not available - cannot sign out');
+      return;
+    }
+
+    try {
+      await firebaseSignOut(auth!);
+      console.log('✅ Signed out successfully');
+    } catch (error) {
+      console.error('❌ Error signing out:', error);
+      throw error;
+    }
+  }
+
+  // Get current user
+  public getCurrentUser(): User | null {
+    return this.currentUser;
+  }
+
+  // Get current user ID
+  public getCurrentUserId(): string | null {
+    return this.currentUser?.uid || null;
+  }
+
+  // Check if user is authenticated
+  public isAuthenticated(): boolean {
+    return !!this.currentUser;
+  }
+
+  // Check if user is anonymous
+  public isAnonymous(): boolean {
+    return this.currentUser?.isAnonymous || false;
+  }
+
+  // Get user profile from Firestore
+  public async getUserProfile(): Promise<UserProfile | null> {
+    if (!this.isFirebaseAvailable() || !this.currentUser) {
+      return null;
+    }
+
+    try {
+      const userRef = doc(db!, 'users', this.currentUser.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (userDoc.exists()) {
+        return userDoc.data() as UserProfile;
+      }
+      return null;
+    } catch (error) {
+      console.error('❌ Error getting user profile:', error);
+      return null;
+    }
+  }
+
+  // Create or update user profile
+  private async createOrUpdateUserProfile(user: User, isAnonymous: boolean): Promise<void> {
+    if (!this.isFirebaseAvailable()) {
+      return;
+    }
+
+    try {
+      const userRef = doc(db!, 'users', user.uid);
+      const userDoc = await getDoc(userRef);
+      
+      const now = serverTimestamp();
+      
+      if (!userDoc.exists()) {
+        // Create new user profile
+        const userProfile: Partial<UserProfile> = {
+          id: user.uid,
+          username: user.displayName || `User${Math.floor(Math.random() * 10000)}`,
+          email: user.email || undefined,
+          createdAt: now,
+          isAnonymous,
+          lastLoginAt: now
+        };
+        
+        await setDoc(userRef, userProfile);
+        console.log('✅ Created user profile');
+      } else {
+        // Update last login time
+        await setDoc(userRef, {
+          lastLoginAt: now
+        }, { merge: true });
+        console.log('✅ Updated user profile');
+      }
+    } catch (error) {
+      console.error('❌ Error creating/updating user profile:', error);
+    }
+  }
+
+  // Add auth state listener
+  public addAuthStateListener(listener: (user: User | null) => void): void {
+    this.authStateListeners.push(listener);
+  }
+
+  // Remove auth state listener
+  public removeAuthStateListener(listener: (user: User | null) => void): void {
+    const index = this.authStateListeners.indexOf(listener);
+    if (index > -1) {
+      this.authStateListeners.splice(index, 1);
+    }
+  }
+
+  // Notify all auth state listeners
+  private notifyAuthStateListeners(user: User | null): void {
+    this.authStateListeners.forEach(listener => {
+      try {
+        listener(user);
+      } catch (error) {
+        console.error('Error in auth state listener:', error);
+      }
+    });
+  }
+
+  // Auto sign-in (try anonymous if not authenticated)
+  public async autoSignIn(): Promise<User | null> {
+    if (!this.isFirebaseAvailable()) {
+      return null;
+    }
+
+    // If already authenticated, return current user
+    if (this.currentUser) {
+      return this.currentUser;
+    }
+
+    // Try to sign in anonymously
+    try {
+      return await this.signInAnonymously();
+    } catch (error) {
+      console.error('Auto sign-in failed:', error);
+      return null;
+    }
+  }
+}
+
+// Export singleton instance
+export const authService = AuthService.getInstance();

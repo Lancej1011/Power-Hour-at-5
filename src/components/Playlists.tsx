@@ -63,6 +63,8 @@ import MenuItem from '@mui/material/MenuItem';
 import YouTubeIcon from '@mui/icons-material/YouTube';
 import SettingsIcon from '@mui/icons-material/Settings';
 import ShareIcon from '@mui/icons-material/Share';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import CodeIcon from '@mui/icons-material/Code';
 
 import { useTheme } from '@mui/material/styles';
 import { useAudio } from '../contexts/AudioContext';
@@ -80,6 +82,7 @@ import {
   setCustomImageForPlaylist,
   clearPlaylistThumbnail
 } from '../utils/youtubeUtils';
+import { getShareCodeForPlaylist } from '../utils/sharedPlaylistUtils';
 
 import UIPreferencesManager from '../utils/uiPreferences';
 
@@ -184,12 +187,43 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
   const [sharingDialogOpen, setSharingDialogOpen] = useState(false);
   const [playlistToShare, setPlaylistToShare] = useState<UnifiedPlaylist | null>(null);
 
+  // Share code display state
+  const [shareCodeCache, setShareCodeCache] = useState<Record<string, string | null>>({});
+
   // --- Start of useCallback wrapped functions ---
 
   const handleStop = useCallback(() => {
     console.log('[PH] handleStop called');
     audio.stopPlaylist();
   }, [audio]);
+
+  // Function to copy text to clipboard
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setSuccess('Share code copied to clipboard!');
+    } catch (err) {
+      console.error('Failed to copy to clipboard:', err);
+      setError('Failed to copy share code to clipboard');
+    }
+  };
+
+  // Function to load share code for a playlist
+  const loadShareCode = useCallback(async (playlist: UnifiedPlaylist) => {
+    if (shareCodeCache[playlist.id] !== undefined) {
+      return shareCodeCache[playlist.id];
+    }
+
+    try {
+      const shareCode = await getShareCodeForPlaylist(playlist.id, playlist.name);
+      setShareCodeCache(prev => ({ ...prev, [playlist.id]: shareCode }));
+      return shareCode;
+    } catch (error) {
+      console.error('Error loading share code:', error);
+      setShareCodeCache(prev => ({ ...prev, [playlist.id]: null }));
+      return null;
+    }
+  }, [shareCodeCache]);
 
   // Audio functions are now handled by AudioContext
 
@@ -1776,6 +1810,87 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
                         <Typography variant="body2" color="text.secondary" mt={1}>
                           Total Clips: {playlist.clips.length}
                         </Typography>
+
+                        {/* Share Code Section */}
+                        {(() => {
+                          const [shareCode, setShareCode] = React.useState<string | null>(shareCodeCache[playlist.id] || null);
+                          const [loading, setLoading] = React.useState(false);
+
+                          React.useEffect(() => {
+                            const loadCode = async () => {
+                              if (shareCodeCache[playlist.id] === undefined) {
+                                setLoading(true);
+                                const code = await loadShareCode(playlist);
+                                setShareCode(code);
+                                setLoading(false);
+                              } else {
+                                setShareCode(shareCodeCache[playlist.id]);
+                              }
+                            };
+                            loadCode();
+                          }, [playlist.id]);
+
+                          if (loading) {
+                            return (
+                              <Box sx={{ display: 'flex', alignItems: 'center', mt: 1 }}>
+                                <CircularProgress size={16} sx={{ mr: 1 }} />
+                                <Typography variant="body2" color="text.secondary">
+                                  Checking for share code...
+                                </Typography>
+                              </Box>
+                            );
+                          }
+
+                          if (shareCode) {
+                            return (
+                              <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                                <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontWeight: 'bold' }}>
+                                  Import Code
+                                </Typography>
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                  <Paper
+                                    variant="outlined"
+                                    sx={{
+                                      px: 2,
+                                      py: 1,
+                                      bgcolor: 'action.hover',
+                                      fontFamily: 'monospace',
+                                      fontSize: '1.1rem',
+                                      fontWeight: 'bold',
+                                      letterSpacing: '0.1em',
+                                      flex: 1,
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center'
+                                    }}
+                                  >
+                                    {shareCode}
+                                  </Paper>
+                                  <Tooltip title="Copy share code">
+                                    <IconButton
+                                      size="small"
+                                      onClick={() => copyToClipboard(shareCode)}
+                                      sx={{
+                                        color: 'primary.main',
+                                        '&:hover': {
+                                          bgcolor: 'primary.main',
+                                          color: 'white'
+                                        }
+                                      }}
+                                    >
+                                      <ContentCopyIcon fontSize="small" />
+                                    </IconButton>
+                                  </Tooltip>
+                                </Box>
+                                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                                  Share this code with others so they can import your playlist
+                                </Typography>
+                              </Box>
+                            );
+                          }
+
+                          return null;
+                        })()}
                       </Paper>
                     </Box>
                   );
