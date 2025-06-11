@@ -76,7 +76,7 @@ import { logDebug, logInfo, logWarn, logError } from '../utils/logger';
 
 
 
-import LoadingSkeleton from './LoadingSkeleton';
+// LoadingSkeleton removed - using ModernLoading instead
 import QuickFilters from './QuickFilters';
 import MetadataEnhancer from './MetadataEnhancer';
 

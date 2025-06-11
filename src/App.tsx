@@ -34,11 +34,7 @@ import { AudioProvider, useAudio } from './contexts/AudioContext';
 import { VisualizerProvider } from './contexts/VisualizerContext';
 import { LibraryProvider, useLibrary } from './contexts/LibraryContext';
 import ErrorBoundary from './components/ErrorBoundary';
-import './utils/ratingSystemTest'; // Import test for browser console access
-import './utils/adminSetup'; // Load admin debug tools
-import './utils/sessionDemo'; // Load session demo for testing
-import './utils/sessionPersistenceTest'; // Load session persistence tests
-import './utils/collaborationTest'; // Load collaboration debug tools
+// Development utilities removed for production build
 
 // Snackbar context
 const SnackbarContext = createContext<(msg: string, severity?: 'success' | 'info' | 'warning' | 'error') => void>(() => {});
