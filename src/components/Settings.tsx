@@ -45,7 +45,8 @@ import {
 } from '@mui/icons-material';
 import { useThemeContext } from '../contexts/ThemeContext';
 import { useAuth, useAuthStatus } from '../contexts/AuthContext';
-// KeyboardShortcutsHelp and CustomThemeEditor removed for production build
+import KeyboardShortcutsHelp from './KeyboardShortcutsHelp';
+import CustomThemeEditor from './CustomThemeEditor';
 import { LoginModal, UserProfile } from './auth';
 
 import type { ColorTheme } from '../themes';
@@ -68,8 +69,10 @@ const Settings: React.FC<SettingsProps> = ({
   const { currentTheme, setTheme, availableThemes, deleteCustomTheme } = useThemeContext();
   const { user, profile, updateProfile, signOut, isLoading } = useAuth();
   const { isAuthenticated, isAnonymous, hasFullAccount } = useAuthStatus();
+  const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [themeMenuAnchor, setThemeMenuAnchor] = useState<null | HTMLElement>(null);
-  // Custom theme editor and keyboard shortcuts removed for production build
+  const [customEditorOpen, setCustomEditorOpen] = useState(false);
+  const [editingTheme, setEditingTheme] = useState<ColorTheme | null>(null);
   const [librarySettings, setLibrarySettings] = useState<any>({});
   const [loginModalOpen, setLoginModalOpen] = useState(false);
   const [isEditingDisplayName, setIsEditingDisplayName] = useState(false);
@@ -100,7 +103,9 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
-  // Keyboard shortcuts handler removed for production build
+  const handleKeyboardShortcuts = () => {
+    setShowKeyboardHelp(true);
+  };
 
   const handleThemeMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
     setThemeMenuAnchor(event.currentTarget);
@@ -112,7 +117,8 @@ const Settings: React.FC<SettingsProps> = ({
 
   const handleThemeSelect = (themeId: string) => {
     if (themeId === 'create-new') {
-      // Custom theme creation removed for production build
+      setEditingTheme(null);
+      setCustomEditorOpen(true);
       handleThemeMenuClose();
     } else {
       setTheme(themeId);
@@ -120,9 +126,21 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
+  const handleEditTheme = (theme: ColorTheme, event: React.MouseEvent) => {
+    event.stopPropagation();
+    setEditingTheme(theme);
+    setCustomEditorOpen(true);
+    handleThemeMenuClose();
+  };
+
   const handleDeleteTheme = (theme: ColorTheme, event: React.MouseEvent) => {
     event.stopPropagation();
     deleteCustomTheme(theme.id);
+  };
+
+  const handleCustomEditorClose = () => {
+    setCustomEditorOpen(false);
+    setEditingTheme(null);
   };
 
   const handleSignInClick = () => {
@@ -419,7 +437,15 @@ const Settings: React.FC<SettingsProps> = ({
               </Typography>
             </ListItem>
 
-            {/* Keyboard shortcuts removed for production build */}
+            <ListItemButton onClick={handleKeyboardShortcuts}>
+              <ListItemIcon>
+                <KeyboardIcon />
+              </ListItemIcon>
+              <ListItemText
+                primary="Keyboard Shortcuts"
+                secondary="View all available keyboard shortcuts"
+              />
+            </ListItemButton>
 
             <Divider sx={{ my: 1 }} />
 
@@ -452,7 +478,11 @@ const Settings: React.FC<SettingsProps> = ({
         </DialogActions>
       </Dialog>
 
-      {/* Keyboard shortcuts dialog removed for production build */}
+      {/* Keyboard Shortcuts Help Dialog */}
+      <KeyboardShortcutsHelp
+        open={showKeyboardHelp}
+        onClose={() => setShowKeyboardHelp(false)}
+      />
 
       {/* Theme Menu */}
       <Menu
@@ -510,6 +540,13 @@ const Settings: React.FC<SettingsProps> = ({
               <Box sx={{ display: 'flex', gap: 0.5 }}>
                 <IconButton
                   size="small"
+                  onClick={(e) => handleEditTheme(theme, e)}
+                  sx={{ p: 0.5 }}
+                >
+                  <EditIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+                <IconButton
+                  size="small"
                   onClick={(e) => handleDeleteTheme(theme, e)}
                   sx={{ p: 0.5 }}
                 >
@@ -522,7 +559,22 @@ const Settings: React.FC<SettingsProps> = ({
             )}
           </MenuItem>
         ))}
-        {/* Custom theme creation removed for production build */}
+        <Divider />
+        <MenuItem
+          onClick={() => handleThemeSelect('create-new')}
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1.5,
+            py: 1.5,
+            px: 2,
+          }}
+        >
+          <AddIcon sx={{ fontSize: 18, color: 'primary.main' }} />
+          <Typography variant="body2" sx={{ flex: 1 }}>
+            Create Custom Theme
+          </Typography>
+        </MenuItem>
         <Box sx={{ px: 2, py: 1, borderTop: 1, borderColor: 'divider' }}>
           <Chip
             label={`Current: ${currentTheme.name}`}
@@ -536,7 +588,12 @@ const Settings: React.FC<SettingsProps> = ({
         </Box>
       </Menu>
 
-      {/* Custom theme editor removed for production build */}
+      {/* Custom Theme Editor */}
+      <CustomThemeEditor
+        open={customEditorOpen}
+        onClose={handleCustomEditorClose}
+        editingTheme={editingTheme}
+      />
 
       {/* Login Modal */}
       <LoginModal

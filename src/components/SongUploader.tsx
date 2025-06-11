@@ -60,8 +60,6 @@ import DragHandleIcon from '@mui/icons-material/DragHandle';
 import TuneIcon from '@mui/icons-material/Tune';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { useLocation, useNavigate } from 'react-router-dom';
-import fs from 'fs';
-import path from 'path';
 import audioBufferToWav from 'audiobuffer-to-wav';
 import { useSnackbar } from '../App';
 import { useTheme } from '@mui/material/styles';
@@ -76,7 +74,7 @@ import { logDebug, logInfo, logWarn, logError } from '../utils/logger';
 
 
 
-// LoadingSkeleton removed - using ModernLoading instead
+import LoadingSkeleton from './LoadingSkeleton';
 import QuickFilters from './QuickFilters';
 import MetadataEnhancer from './MetadataEnhancer';
 

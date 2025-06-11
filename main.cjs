@@ -1,5 +1,12 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, globalShortcut } = require('electron');
-const { autoUpdater } = require('electron-updater');
+
+// Try to load electron-updater, but don't fail if it's not available
+let autoUpdater = null;
+try {
+  autoUpdater = require('electron-updater').autoUpdater;
+} catch (error) {
+  console.log('electron-updater not available, auto-updates disabled');
+}
 const path = require('path');
 const fs = require('fs');
 const mm = require('music-metadata');
@@ -23,18 +30,27 @@ const logger = {
 };
 
 // Auto-updater configuration
-autoUpdater.logger = logger;
-autoUpdater.autoDownload = false; // Don't auto-download, let user choose
-autoUpdater.autoInstallOnAppQuit = false; // Don't auto-install, let user choose
+if (autoUpdater) {
+  autoUpdater.logger = logger;
+  autoUpdater.autoDownload = false; // Don't auto-download, let user choose
+  autoUpdater.autoInstallOnAppQuit = false; // Don't auto-install, let user choose
+  autoUpdater.allowPrerelease = false; // Only stable releases by default
+  autoUpdater.allowDowngrade = false; // Don't allow downgrades
+  autoUpdater.disableWebInstaller = false; // Allow web installer fallback
 
-// Configure update server
-if (process.env.NODE_ENV === 'production') {
-  autoUpdater.setFeedURL({
-    provider: 'github',
-    owner: 'Lancej1011',
-    repo: 'Power-Hour-at-5',
-    private: false
-  });
+  // Configure update server
+  if (process.env.NODE_ENV === 'production') {
+    autoUpdater.setFeedURL({
+      provider: 'github',
+      owner: 'Lancej1011',
+      repo: 'Power-Hour-at-5',
+      private: false,
+      releaseType: 'release' // Only stable releases
+    });
+  }
+
+  // Set update check interval (24 hours)
+  autoUpdater.checkForUpdatesAndNotify();
 }
 
 // Default paths
@@ -228,7 +244,20 @@ app.whenReady().then(() => {
 
 // Auto-updater setup and event handlers
 function setupAutoUpdater() {
+  if (!autoUpdater) {
+    logger.info('Auto-updater not available, skipping setup');
+    return;
+  }
+
   logger.info('Setting up auto-updater');
+
+  // Load update settings
+  const updateSettings = loadConfig();
+
+  // Configure auto-updater based on settings
+  autoUpdater.allowPrerelease = updateSettings.allowPrerelease || false;
+  autoUpdater.autoDownload = updateSettings.autoDownloadUpdates || false;
+  autoUpdater.autoInstallOnAppQuit = updateSettings.autoInstallUpdates || false;
 
   // Auto-updater events
   autoUpdater.on('checking-for-update', () => {
@@ -240,38 +269,76 @@ function setupAutoUpdater() {
 
   autoUpdater.on('update-available', (info) => {
     logger.info('Update available:', info);
+
+    // Check if update is postponed
+    const config = loadConfig();
+    const postponedUntil = config.updatePostponedUntil;
+    if (postponedUntil && new Date(postponedUntil) > new Date()) {
+      logger.info('Update postponed until:', postponedUntil);
+      return;
+    }
+
     if (mainWindow) {
       mainWindow.webContents.send('update-available', {
         version: info.version,
         releaseDate: info.releaseDate,
         releaseNotes: info.releaseNotes,
-        size: info.files?.[0]?.size
+        size: info.files?.[0]?.size,
+        currentVersion: app.getVersion(),
+        isPrerelease: info.prerelease || false,
+        downloadUrl: info.files?.[0]?.url
       });
     }
+
+    // Add to update history
+    addUpdateHistoryEntry({
+      type: 'update-available',
+      version: info.version,
+      currentVersion: app.getVersion(),
+      size: info.files?.[0]?.size
+    });
   });
 
   autoUpdater.on('update-not-available', (info) => {
     logger.info('Update not available:', info);
     if (mainWindow) {
-      mainWindow.webContents.send('update-not-available');
+      mainWindow.webContents.send('update-not-available', {
+        currentVersion: app.getVersion(),
+        checkedVersion: info.version
+      });
     }
   });
 
   autoUpdater.on('error', (err) => {
     logger.error('Update error:', err);
     if (mainWindow) {
-      mainWindow.webContents.send('update-error', err.message);
+      mainWindow.webContents.send('update-error', {
+        message: err.message,
+        code: err.code,
+        stack: err.stack
+      });
     }
+
+    // Add to update history
+    addUpdateHistoryEntry({
+      type: 'update-error',
+      error: err.message,
+      currentVersion: app.getVersion()
+    });
   });
 
   autoUpdater.on('download-progress', (progressObj) => {
-    logger.info('Download progress:', progressObj);
+    logger.info('Download progress:', Math.round(progressObj.percent) + '%');
     if (mainWindow) {
       mainWindow.webContents.send('update-download-progress', {
         bytesPerSecond: progressObj.bytesPerSecond,
-        percent: progressObj.percent,
+        percent: Math.round(progressObj.percent * 100) / 100,
         transferred: progressObj.transferred,
-        total: progressObj.total
+        total: progressObj.total,
+        transferredFormatted: formatBytes(progressObj.transferred),
+        totalFormatted: formatBytes(progressObj.total),
+        speedFormatted: formatBytes(progressObj.bytesPerSecond) + '/s',
+        eta: calculateETA(progressObj.transferred, progressObj.total, progressObj.bytesPerSecond)
       });
     }
   });
@@ -281,15 +348,121 @@ function setupAutoUpdater() {
     if (mainWindow) {
       mainWindow.webContents.send('update-downloaded', {
         version: info.version,
-        releaseNotes: info.releaseNotes
+        releaseNotes: info.releaseNotes,
+        currentVersion: app.getVersion(),
+        downloadPath: info.downloadedFile
       });
     }
+
+    // Add to update history
+    addUpdateHistoryEntry({
+      type: 'update-downloaded',
+      version: info.version,
+      currentVersion: app.getVersion()
+    });
+
+    // Auto-install if enabled
+    const config = loadConfig();
+    if (config.autoInstallUpdates) {
+      setTimeout(() => {
+        autoUpdater.quitAndInstall();
+      }, 5000); // Give user 5 seconds to cancel
+    }
   });
+
+  // Schedule periodic update checks
+  scheduleUpdateChecks();
+}
+
+// Helper function to format bytes
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+// Helper function to calculate ETA
+function calculateETA(transferred, total, bytesPerSecond) {
+  if (bytesPerSecond === 0) return 'Unknown';
+  const remaining = total - transferred;
+  const seconds = Math.round(remaining / bytesPerSecond);
+
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${Math.round(seconds / 3600)}h`;
+}
+
+// Helper function to add update history entry
+async function addUpdateHistoryEntry(entry) {
+  try {
+    ensureDefaultFolders();
+    const historyFile = path.join(DEFAULT_APP_DATA_FOLDER, 'update-history.json');
+
+    let history = [];
+    if (fs.existsSync(historyFile)) {
+      try {
+        const data = fs.readFileSync(historyFile, 'utf8');
+        history = JSON.parse(data);
+      } catch (e) {
+        // Start with empty history if file is corrupted
+      }
+    }
+
+    // Add new entry
+    history.unshift({
+      ...entry,
+      timestamp: new Date().toISOString(),
+      id: Date.now().toString()
+    });
+
+    // Keep only last 50 entries
+    history = history.slice(0, 50);
+
+    fs.writeFileSync(historyFile, JSON.stringify(history, null, 2));
+  } catch (error) {
+    logger.error('Failed to add update history entry:', error);
+  }
+}
+
+// Schedule periodic update checks
+function scheduleUpdateChecks() {
+  const config = loadConfig();
+
+  if (!config.autoCheckUpdates) {
+    logger.info('Automatic update checks disabled');
+    return;
+  }
+
+  const checkInterval = (config.updateCheckInterval || 24) * 60 * 60 * 1000; // Convert hours to milliseconds
+
+  // Check immediately if it's been more than the interval since last check
+  const lastCheck = config.lastUpdateCheck;
+  if (!lastCheck || (new Date() - new Date(lastCheck)) > checkInterval) {
+    setTimeout(() => {
+      if (autoUpdater) {
+        autoUpdater.checkForUpdatesAndNotify();
+      }
+    }, 30000); // Wait 30 seconds after startup
+  }
+
+  // Schedule regular checks
+  setInterval(() => {
+    if (autoUpdater && config.autoCheckUpdates) {
+      logger.info('Performing scheduled update check');
+      autoUpdater.checkForUpdatesAndNotify();
+    }
+  }, checkInterval);
 }
 
 // Auto-updater IPC handlers
 ipcMain.handle('check-for-updates', async () => {
   try {
+    if (!autoUpdater) {
+      return { available: false, message: 'Auto-updater not available' };
+    }
+
     if (process.env.NODE_ENV !== 'production') {
       return { available: false, message: 'Updates disabled in development' };
     }
@@ -310,6 +483,10 @@ ipcMain.handle('check-for-updates', async () => {
 
 ipcMain.handle('download-update', async () => {
   try {
+    if (!autoUpdater) {
+      throw new Error('Auto-updater not available');
+    }
+
     if (process.env.NODE_ENV !== 'production') {
       throw new Error('Updates disabled in development');
     }
@@ -324,6 +501,10 @@ ipcMain.handle('download-update', async () => {
 
 ipcMain.handle('install-update', async () => {
   try {
+    if (!autoUpdater) {
+      throw new Error('Auto-updater not available');
+    }
+
     if (process.env.NODE_ENV !== 'production') {
       throw new Error('Updates disabled in development');
     }
@@ -339,6 +520,176 @@ ipcMain.handle('install-update', async () => {
 
 ipcMain.handle('get-current-version', () => {
   return app.getVersion();
+});
+
+// Enhanced auto-updater IPC handlers
+ipcMain.handle('get-update-settings', async () => {
+  try {
+    const config = loadConfig();
+    return {
+      autoCheck: config.autoCheckUpdates !== false, // Default to true
+      checkInterval: config.updateCheckInterval || 24, // Hours
+      allowPrerelease: config.allowPrerelease || false,
+      autoDownload: config.autoDownloadUpdates || false,
+      autoInstall: config.autoInstallUpdates || false,
+      lastCheck: config.lastUpdateCheck || null,
+      updateChannel: config.updateChannel || 'stable'
+    };
+  } catch (error) {
+    logger.error('Failed to get update settings:', error);
+    return {
+      autoCheck: true,
+      checkInterval: 24,
+      allowPrerelease: false,
+      autoDownload: false,
+      autoInstall: false,
+      lastCheck: null,
+      updateChannel: 'stable'
+    };
+  }
+});
+
+ipcMain.handle('set-update-settings', async (event, settings) => {
+  try {
+    const config = loadConfig();
+
+    // Update configuration
+    config.autoCheckUpdates = settings.autoCheck;
+    config.updateCheckInterval = settings.checkInterval;
+    config.allowPrerelease = settings.allowPrerelease;
+    config.autoDownloadUpdates = settings.autoDownload;
+    config.autoInstallUpdates = settings.autoInstall;
+    config.updateChannel = settings.updateChannel;
+
+    // Save configuration
+    ensureDefaultFolders();
+    const configPath = path.join(DEFAULT_APP_DATA_FOLDER, 'config.json');
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    // Update auto-updater settings
+    if (autoUpdater) {
+      autoUpdater.allowPrerelease = settings.allowPrerelease;
+      autoUpdater.autoDownload = settings.autoDownload;
+      autoUpdater.autoInstallOnAppQuit = settings.autoInstall;
+    }
+
+    logger.info('Update settings saved:', settings);
+    return true;
+  } catch (error) {
+    logger.error('Failed to save update settings:', error);
+    return false;
+  }
+});
+
+ipcMain.handle('check-for-updates-manual', async () => {
+  try {
+    if (!autoUpdater) {
+      return { available: false, message: 'Auto-updater not available' };
+    }
+
+    if (process.env.NODE_ENV !== 'production') {
+      return { available: false, message: 'Updates disabled in development' };
+    }
+
+    // Update last check time
+    const config = loadConfig();
+    config.lastUpdateCheck = new Date().toISOString();
+    const configPath = path.join(DEFAULT_APP_DATA_FOLDER, 'config.json');
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const result = await autoUpdater.checkForUpdates();
+    return {
+      available: result?.updateInfo ? true : false,
+      version: result?.updateInfo?.version,
+      releaseDate: result?.updateInfo?.releaseDate,
+      releaseNotes: result?.updateInfo?.releaseNotes,
+      size: result?.updateInfo?.files?.[0]?.size,
+      currentVersion: app.getVersion(),
+      checkTime: config.lastUpdateCheck
+    };
+  } catch (error) {
+    logger.error('Manual update check failed:', error);
+    throw error;
+  }
+});
+
+ipcMain.handle('cancel-update-download', async () => {
+  try {
+    if (!autoUpdater) {
+      throw new Error('Auto-updater not available');
+    }
+
+    // Note: electron-updater doesn't have a direct cancel method
+    // We can only prevent installation after download
+    logger.info('Update download cancellation requested');
+    return true;
+  } catch (error) {
+    logger.error('Cancel update download failed:', error);
+    throw error;
+  }
+});
+
+ipcMain.handle('postpone-update', async (event, postponeUntil) => {
+  try {
+    const config = loadConfig();
+    config.updatePostponedUntil = postponeUntil;
+
+    const configPath = path.join(DEFAULT_APP_DATA_FOLDER, 'config.json');
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    logger.info('Update postponed until:', postponeUntil);
+    return true;
+  } catch (error) {
+    logger.error('Failed to postpone update:', error);
+    return false;
+  }
+});
+
+ipcMain.handle('get-update-history', async () => {
+  try {
+    const historyFile = path.join(DEFAULT_APP_DATA_FOLDER, 'update-history.json');
+    if (fs.existsSync(historyFile)) {
+      const data = fs.readFileSync(historyFile, 'utf8');
+      return JSON.parse(data);
+    }
+    return [];
+  } catch (error) {
+    logger.error('Failed to load update history:', error);
+    return [];
+  }
+});
+
+ipcMain.handle('add-update-history-entry', async (event, entry) => {
+  try {
+    ensureDefaultFolders();
+    const historyFile = path.join(DEFAULT_APP_DATA_FOLDER, 'update-history.json');
+
+    let history = [];
+    if (fs.existsSync(historyFile)) {
+      try {
+        const data = fs.readFileSync(historyFile, 'utf8');
+        history = JSON.parse(data);
+      } catch (e) {
+        // Start with empty history if file is corrupted
+      }
+    }
+
+    // Add new entry
+    history.unshift({
+      ...entry,
+      timestamp: new Date().toISOString(),
+      id: Date.now().toString()
+    });
+
+    // Keep only last 50 entries
+    history = history.slice(0, 50);
+
+    fs.writeFileSync(historyFile, JSON.stringify(history, null, 2));
+    return true;
+  } catch (error) {
+    logger.error('Failed to add update history entry:', error);
+    return false;
+  }
 });
 
 // Version management IPC handlers

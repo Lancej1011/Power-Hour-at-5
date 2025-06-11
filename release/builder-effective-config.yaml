@@ -1,0 +1,109 @@
+directories:
+  output: release
+  buildResources: build
+appId: com.phat5.app
+productName: PHat5
+compression: maximum
+removePackageScripts: true
+nodeGypRebuild: false
+files:
+  - filter:
+      - dist/**/*
+      - main.cjs
+      - preload.cjs
+      - package.json
+      - '!node_modules/**/*'
+      - '!src/**/*'
+      - '!*.md'
+      - '!*.log'
+      - '!.env*'
+      - '!tsconfig*.json'
+      - '!vite.config.ts'
+      - '!eslint.config.js'
+extraResources:
+  - from: USER_GUIDE.md
+    to: USER_GUIDE.md
+  - from: LICENSE
+    to: LICENSE
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+        - ia32
+    - target: portable
+      arch:
+        - x64
+  icon: public/icon.ico
+  publisherName: PHat5 Development Team
+  verifyUpdateCodeSignature: false
+  sign: null
+  certificateFile: null
+  certificatePassword: <stripped sensitive data>
+  signAndEditExecutable: false
+  signDlls: false
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  icon: public/logo512.png
+  category: public.app-category.music
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+    - target: rpm
+      arch:
+        - x64
+  icon: public/logo512.png
+  category: AudioVideo
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: PHat5
+  perMachine: false
+  allowElevation: true
+  installerIcon: public/icon.ico
+  uninstallerIcon: public/icon.ico
+  installerHeaderIcon: public/icon.ico
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+  menuCategory: Music & Audio
+  include: scripts/installer.nsh
+dmg:
+  title: PHat5 Installer
+  backgroundColor: '#1976d2'
+  window:
+    width: 540
+    height: 380
+  contents:
+    - x: 410
+      'y': 150
+      type: link
+      path: /Applications
+    - x: 130
+      'y': 150
+      type: file
+publish:
+  provider: github
+  owner: Lancej1011
+  repo: Power-Hour-at-5
+  releaseType: release
+generateUpdatesFilesForAllChannels: true
+electronUpdaterCompatibility: '>=2.16'
+electronVersion: 36.1.0

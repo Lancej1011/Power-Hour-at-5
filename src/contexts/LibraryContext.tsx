@@ -18,6 +18,7 @@ interface LibrarySong {
   // Library information (added when loading from multiple libraries)
   libraryPath?: string;
   libraryName?: string;
+  library?: string; // Add library field for sorting
 }
 
 interface LibraryProgress {

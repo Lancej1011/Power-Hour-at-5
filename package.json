@@ -10,6 +10,9 @@
     "start": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && npm run dev:electron\"",
     "build": "tsc -b && vite build",
     "build:prod": "cross-env NODE_ENV=production npm run build",
+    "build:web": "vite build --config vite.config.web.ts && node -e \"const fs = require('fs'); if (fs.existsSync('dist-web/index.web.html')) { fs.renameSync('dist-web/index.web.html', 'dist-web/index.html'); }\"",
+    "build:web:prod": "cross-env NODE_ENV=production npm run build:web",
+    "preview:web": "vite preview --config vite.config.web.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "preview": "vite preview",
@@ -18,18 +21,24 @@
     "electron:dist": "npm run build:prod && electron-builder --publish=never",
     "electron:pack": "npm run build:prod && electron-builder --dir",
     "electron:publish": "npm run build:prod && electron-builder --publish=always",
-    "release": "node scripts/release.js",
-    "release:patch": "node scripts/release.js patch",
-    "release:minor": "node scripts/release.js minor",
-    "release:major": "node scripts/release.js major",
+    "release": "node scripts/build-release.js",
     "release:draft": "DRAFT_RELEASE=true node scripts/build-release.js",
     "release:prerelease": "PRERELEASE=true node scripts/build-release.js",
-    "clean": "rimraf dist dist-electron",
+    "clean": "rimraf dist dist-electron dist-web",
     "prebuild": "npm run clean",
     "analyze": "npm run build -- --analyze",
     "build:production": "node scripts/build-production.js",
+    "build:installer": "node scripts/build-installer.cjs",
+    "build:installer:win": "BUILD_PLATFORMS=win node scripts/build-installer.cjs",
+    "build:installer:mac": "BUILD_PLATFORMS=mac node scripts/build-installer.cjs",
+    "build:installer:linux": "BUILD_PLATFORMS=linux node scripts/build-installer.cjs",
+    "build:installer:all": "BUILD_PLATFORMS=win,mac,linux node scripts/build-installer.cjs",
+    "copy-installer": "node scripts/copy-installer.cjs",
+    "fix-firebase": "node scripts/fix-firebase-and-rebuild.cjs",
     "setup-env": "node scripts/setup-env.js",
-    "prepare-release": "node scripts/prepare-release.js"
+    "deploy:firebase": "npm run build:web:prod && firebase deploy --only hosting",
+    "deploy:netlify": "npm run build:web:prod && netlify deploy --prod --dir=dist-web",
+    "deploy:vercel": "npm run build:web:prod && vercel --prod"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -96,6 +105,7 @@
     "typescript": "~5.7.2",
     "typescript-eslint": "^8.26.1",
     "vite": "^6.3.1",
+    "vite-plugin-pwa": "^0.21.2",
     "wait-on": "^8.0.3"
   },
   "description": "PHat5 - The ultimate Power Hour music mixing application. Create custom playlists, extract clips, and host the perfect Power Hour party.",
@@ -112,12 +122,12 @@
   ],
   "author": "PHat5 Development Team",
   "license": "MIT",
-  "homepage": "https://github.com/Lancej1011/Power-Hour-at-5",
+  "homepage": "https://github.com/your-username/phat5",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Lancej1011/Power-Hour-at-5.git"
+    "url": "https://github.com/your-username/phat5.git"
   },
   "bugs": {
-    "url": "https://github.com/Lancej1011/Power-Hour-at-5/issues"
+    "url": "https://github.com/your-username/phat5/issues"
   }
 }

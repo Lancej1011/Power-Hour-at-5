@@ -1,0 +1,69 @@
+{
+  "appId": "com.phat5.app",
+  "productName": "PHat5",
+  "directories": {
+    "output": "installer-output-v3"
+  },
+  "compression": "maximum",
+  "removePackageScripts": true,
+  "nodeGypRebuild": false,
+  "files": [
+    "dist/**/*",
+    "main.cjs",
+    "preload.cjs",
+    "package.json",
+    "!src/**/*",
+    "!*.md",
+    "!*.log",
+    "!.env*",
+    "!tsconfig*.json",
+    "!vite.config.ts",
+    "!eslint.config.js"
+  ],
+  "extraFiles": [
+    {
+      "from": "node_modules/electron-updater",
+      "to": "node_modules/electron-updater",
+      "filter": ["**/*"]
+    }
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      },
+      {
+        "target": "portable",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "public/icon.ico",
+    "publisherName": "PHat5 Development Team",
+    "verifyUpdateCodeSignature": false,
+    "sign": null
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "PHat5",
+    "perMachine": false,
+    "allowElevation": true,
+    "installerIcon": "public/icon.ico",
+    "uninstallerIcon": "public/icon.ico",
+    "installerHeaderIcon": "public/icon.ico",
+    "deleteAppDataOnUninstall": false,
+    "runAfterFinish": true,
+    "menuCategory": "Music & Audio"
+  },
+  "publish": {
+    "provider": "github",
+    "owner": "Lancej1011",
+    "repo": "Power-Hour-at-5",
+    "releaseType": "release"
+  },
+  "generateUpdatesFilesForAllChannels": true,
+  "electronUpdaterCompatibility": ">=2.16"
+}

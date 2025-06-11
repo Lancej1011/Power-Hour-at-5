@@ -4,7 +4,9 @@ import react from '@vitejs/plugin-react'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-  // Removed @ffmpeg/ffmpeg as it's not used in the frontend
+  optimizeDeps: {
+    include: ['@ffmpeg/ffmpeg'],
+  },
   base: './',
   build: {
     // Optimize for production
@@ -22,7 +24,7 @@ export default defineConfig({
           // Vendor chunk for large dependencies
           vendor: ['react', 'react-dom', '@mui/material', '@emotion/react', '@emotion/styled'],
           // Audio processing chunk
-          audio: ['howler', 'audiobuffer-to-wav'],
+          audio: ['howler', 'music-metadata', 'audiobuffer-to-wav'],
           // UI components chunk
           ui: ['@hello-pangea/dnd', 'react-window', 'react-dropzone'],
         },
@@ -41,4 +43,12 @@ export default defineConfig({
       allow: ['..'],
     },
   },
+  // Web deployment specific configurations
+  define: {
+    // Define environment variables for web deployment
+    __IS_WEB__: JSON.stringify(true),
+    __IS_ELECTRON__: JSON.stringify(false),
+  },
+  // PWA configuration
+  publicDir: 'public',
 })

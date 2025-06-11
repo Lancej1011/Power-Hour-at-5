@@ -788,99 +788,9 @@ class CollaborationFirebaseService {
     }
   }
 
-  /**
-   * Get user's collaborative playlists
-   */
-  async getUserCollaborations(): Promise<CollaborativePlaylist[]> {
-    if (!this.isAvailable()) {
-      return [];
-    }
 
-    const currentUser = this.getCurrentUser();
-    if (!currentUser) {
-      return [];
-    }
 
-    try {
-      // Get playlists where user is owner
-      const ownerQuery = query(
-        collection(db!, COLLABORATION_COLLECTIONS.COLLABORATIVE_PLAYLISTS),
-        where('ownerId', '==', currentUser.uid)
-      );
-      const ownerSnapshot = await getDocs(ownerQuery);
-      const ownedPlaylists = ownerSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as CollaborativePlaylist[];
 
-      // Get playlists where user is collaborator
-      const collaboratorQuery = query(
-        collection(db!, COLLABORATION_COLLECTIONS.COLLABORATIVE_PLAYLISTS),
-        where(`collaborators.${currentUser.uid}`, '!=', null)
-      );
-      const collaboratorSnapshot = await getDocs(collaboratorQuery);
-      const collaboratorPlaylists = collaboratorSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as CollaborativePlaylist[];
-
-      // Combine and deduplicate
-      const allPlaylists = [...ownedPlaylists, ...collaboratorPlaylists];
-      const uniquePlaylists = allPlaylists.filter((playlist, index, self) =>
-        index === self.findIndex(p => p.id === playlist.id)
-      );
-
-      return uniquePlaylists;
-    } catch (error) {
-      console.error('❌ Error getting user collaborations:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Remove collaborator from playlist
-   */
-  async removeCollaborator(playlistId: string, userId: string): Promise<boolean> {
-    if (!this.isAvailable()) {
-      return false;
-    }
-
-    const currentUser = this.getCurrentUser();
-    if (!currentUser) {
-      return false;
-    }
-
-    try {
-      const playlistRef = doc(db!, COLLABORATION_COLLECTIONS.COLLABORATIVE_PLAYLISTS, playlistId);
-      const playlistDoc = await getDoc(playlistRef);
-
-      if (!playlistDoc.exists()) {
-        console.error('Playlist not found');
-        return false;
-      }
-
-      const playlist = playlistDoc.data() as CollaborativePlaylist;
-
-      // Check if current user is owner
-      if (playlist.ownerId !== currentUser.uid) {
-        console.error('Only playlist owner can remove collaborators');
-        return false;
-      }
-
-      // Remove collaborator
-      await updateDoc(playlistRef, {
-        [`collaborators.${userId}`]: deleteField(),
-        activeUsers: arrayRemove(userId),
-        lastCollaborativeActivity: serverTimestamp()
-      });
-
-      console.log('✅ Collaborator removed successfully');
-      return true;
-    } catch (error) {
-      console.error('❌ Error removing collaborator:', error);
-      return false;
-    }
-  }
 
   /**
    * Convert an existing playlist to collaborative
@@ -1098,90 +1008,7 @@ class CollaborationFirebaseService {
     }
   }
 
-  /**
-   * Get invitations for current user
-   */
-  async getUserInvitations(): Promise<{ sent: CollaborationInvitation[]; received: CollaborationInvitation[] }> {
-    if (!this.isAvailable()) {
-      return { sent: [], received: [] };
-    }
 
-    const currentUser = this.getCurrentUser();
-    if (!currentUser) {
-      return { sent: [], received: [] };
-    }
-
-    try {
-      // Get sent invitations
-      const sentQuery = query(
-        collection(db!, COLLABORATION_COLLECTIONS.COLLABORATION_INVITATIONS),
-        where('inviterId', '==', currentUser.uid),
-        orderBy('createdAt', 'desc')
-      );
-      const sentSnapshot = await getDocs(sentQuery);
-      const sent = sentSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as CollaborationInvitation[];
-
-      // Get received invitations
-      const receivedQuery = query(
-        collection(db!, COLLABORATION_COLLECTIONS.COLLABORATION_INVITATIONS),
-        where('inviteeUserId', '==', currentUser.uid),
-        orderBy('createdAt', 'desc')
-      );
-      const receivedSnapshot = await getDocs(receivedQuery);
-      const received = receivedSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as CollaborationInvitation[];
-
-      return { sent, received };
-    } catch (error) {
-      console.error('❌ Error getting user invitations:', error);
-      return { sent: [], received: [] };
-    }
-  }
-
-  /**
-   * Respond to invitation
-   */
-  async respondToInvitation(
-    invitationId: string,
-    response: 'accept' | 'decline'
-  ): Promise<boolean> {
-    if (!this.isAvailable()) {
-      return false;
-    }
-
-    const currentUser = this.getCurrentUser();
-    if (!currentUser) {
-      return false;
-    }
-
-    try {
-      const invitationRef = doc(db!, COLLABORATION_COLLECTIONS.COLLABORATION_INVITATIONS, invitationId);
-      await updateDoc(invitationRef, {
-        status: response === 'accept' ? 'accepted' : 'declined',
-        respondedAt: serverTimestamp()
-      });
-
-      // If accepted, add user to collaborative playlist
-      if (response === 'accept') {
-        const invitationDoc = await getDoc(invitationRef);
-        if (invitationDoc.exists()) {
-          const invitation = invitationDoc.data() as CollaborationInvitation;
-          await this.addCollaborator(invitation.playlistId, currentUser.uid, invitation.permission);
-        }
-      }
-
-      console.log('✅ Invitation response recorded:', response);
-      return true;
-    } catch (error) {
-      console.error('❌ Error responding to invitation:', error);
-      return false;
-    }
-  }
 
   // ==================== COLLABORATOR MANAGEMENT ====================
 
@@ -1250,7 +1077,7 @@ class CollaborationFirebaseService {
       }
 
       await updateDoc(playlistRef, {
-        [`collaborators.${userId}`]: deleteDoc,
+        [`collaborators.${userId}`]: deleteField(),
         activeUsers: arrayRemove(userId),
         updatedAt: serverTimestamp(),
         lastCollaborativeActivity: serverTimestamp()

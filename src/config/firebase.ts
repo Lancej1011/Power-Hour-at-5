@@ -46,6 +46,38 @@ if (isFirebaseConfigured()) {
     app = initializeApp(firebaseConfig);
     db = getFirestore(app);
     auth = getAuth(app);
+
+    // Configure auth for Electron environment
+    if (typeof window !== 'undefined') {
+      const isElectron = window.location.protocol === 'file:' ||
+                        window.location.hostname === 'localhost' ||
+                        window.location.hostname === '127.0.0.1' ||
+                        window.location.protocol.startsWith('app:') ||
+                        window.location.protocol.startsWith('electron:') ||
+                        (typeof window.require !== 'undefined'); // Additional Electron detection
+
+      if (isElectron) {
+        console.log('🔧 Configuring Firebase Auth for Electron environment');
+        console.log('🔧 Current location:', window.location.href);
+        console.log('🔧 Protocol:', window.location.protocol);
+        console.log('🔧 Hostname:', window.location.hostname);
+
+        // For Electron apps, we need to disable domain verification
+        // since file:// and app:// protocols aren't supported by Firebase
+        try {
+          // Disable app verification for Electron
+          auth.settings.appVerificationDisabledForTesting = true;
+
+          // Use device language
+          auth.useDeviceLanguage();
+
+          console.log('✅ Firebase Auth configured for Electron');
+        } catch (error) {
+          console.warn('⚠️ Could not fully configure Firebase Auth for Electron:', error);
+        }
+      }
+    }
+
     console.log('✅ Firebase initialized successfully');
   } catch (error) {
     console.error('❌ Error initializing Firebase:', error);

@@ -2,16 +2,19 @@
   "appId": "com.phat5.app",
   "productName": "PHat5",
   "directories": {
-    "output": "dist-electron"
+    "output": "dist-electron",
+    "buildResources": "build"
   },
   "compression": "maximum",
   "removePackageScripts": true,
   "nodeGypRebuild": false,
+  "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
   "files": [
     "dist/**/*",
     "main.cjs",
     "preload.cjs",
     "package.json",
+    "node_modules/electron-updater/**/*",
     "!node_modules/**/*",
     "!src/**/*",
     "!*.md",
@@ -19,7 +22,12 @@
     "!.env*",
     "!tsconfig*.json",
     "!vite.config.ts",
-    "!eslint.config.js"
+    "!eslint.config.js",
+    "!scripts/**/*",
+    "!docs/**/*",
+    "!Installer/**/*",
+    "!installer-output*/**/*",
+    "!release/**/*"
   ],
   "extraResources": [
     {
@@ -40,14 +48,17 @@
       {
         "target": "portable",
         "arch": ["x64"]
+      },
+      {
+        "target": "zip",
+        "arch": ["x64"]
       }
     ],
     "icon": "public/icon.ico",
     "publisherName": "PHat5 Development Team",
     "verifyUpdateCodeSignature": false,
-    "sign": null,
-    "certificateFile": null,
-    "certificatePassword": null
+    "requestedExecutionLevel": "asInvoker",
+    "artifactName": "${productName}-Setup-${version}.${ext}"
   },
   "mac": {
     "target": [
@@ -87,19 +98,30 @@
   "nsis": {
     "oneClick": false,
     "allowToChangeInstallationDirectory": true,
+    "allowElevation": true,
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
     "shortcutName": "PHat5",
+    "displayLanguageSelector": false,
+    "installerLanguages": ["en_US"],
+    "language": "1033",
     "perMachine": false,
-    "allowElevation": true,
+    "runAfterFinish": true,
+    "menuCategory": "Music & Audio",
+    "artifactName": "${productName}-Setup-${version}.${ext}",
     "installerIcon": "public/icon.ico",
     "uninstallerIcon": "public/icon.ico",
     "installerHeaderIcon": "public/icon.ico",
+    "installerSidebar": "build/installer-sidebar.bmp",
+    "uninstallerSidebar": "build/uninstaller-sidebar.bmp",
     "deleteAppDataOnUninstall": false,
-    "runAfterFinish": true,
-    "createStartMenuShortcut": true,
-    "menuCategory": "Music & Audio",
-    "include": "scripts/installer.nsh"
+    "differentialPackage": true,
+    "packElevateHelper": true,
+    "warningsAsErrors": false,
+    "unicode": true,
+    "guid": "12345678-1234-1234-1234-123456789012",
+    "include": "scripts/installer.nsh",
+    "script": "scripts/installer-script.nsh"
   },
   "dmg": {
     "title": "PHat5 Installer",
@@ -122,13 +144,17 @@
       }
     ]
   },
-  "publish": {
-    "provider": "github",
-    "owner": "Lancej1011",
-    "repo": "Power-Hour-at-5",
-    "releaseType": "release"
-  },
-  "afterSign": "scripts/notarize.js",
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "Lancej1011",
+      "repo": "Power-Hour-at-5",
+      "releaseType": "release",
+      "publishAutoUpdate": true
+    }
+  ],
   "generateUpdatesFilesForAllChannels": true,
-  "electronUpdaterCompatibility": ">=2.16"
+  "electronUpdaterCompatibility": ">=2.16",
+  "buildVersion": "${env.BUILD_NUMBER}",
+  "forceCodeSigning": false
 }

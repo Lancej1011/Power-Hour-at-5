@@ -1,8 +1,11 @@
 # PHat5 NSIS Installer Script
-# Custom installer configuration for enhanced functionality
+# Professional installer configuration with enhanced functionality
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
+!include "WinVer.nsh"
+!include "x64.nsh"
+!include "LogicLib.nsh"
 
 # Installer attributes
 Name "PHat5"
@@ -10,6 +13,11 @@ OutFile "PHat5-Setup.exe"
 InstallDir "$PROGRAMFILES64\PHat5"
 InstallDirRegKey HKLM "Software\PHat5" "InstallPath"
 RequestExecutionLevel admin
+Unicode True
+
+# Compression
+SetCompressor /SOLID lzma
+SetCompressorDictSize 32
 
 # Version information
 VIProductVersion "1.0.0.0"
@@ -25,8 +33,22 @@ VIAddVersionKey "LegalCopyright" "© 2024 PHat5 Development Team"
 !define MUI_ICON "public\icon.ico"
 !define MUI_UNICON "public\icon.ico"
 !define MUI_HEADERIMAGE
-!define MUI_HEADERIMAGE_BITMAP "public\logo512.png"
-!define MUI_WELCOMEFINISHPAGE_BITMAP "public\logo512.png"
+!define MUI_HEADERIMAGE_BITMAP "build\installer-header.bmp"
+!define MUI_HEADERIMAGE_RIGHT
+!define MUI_WELCOMEFINISHPAGE_BITMAP "build\installer-sidebar.bmp"
+!define MUI_UNWELCOMEFINISHPAGE_BITMAP "build\uninstaller-sidebar.bmp"
+
+# Welcome page customization
+!define MUI_WELCOMEPAGE_TITLE "Welcome to PHat5 Setup"
+!define MUI_WELCOMEPAGE_TEXT "This wizard will guide you through the installation of PHat5, the ultimate Power Hour music mixing application.$\r$\n$\r$\nPHat5 allows you to create custom playlists, extract clips, and host the perfect Power Hour party.$\r$\n$\r$\nClick Next to continue."
+
+# Finish page customization
+!define MUI_FINISHPAGE_TITLE "PHat5 Installation Complete"
+!define MUI_FINISHPAGE_TEXT "PHat5 has been successfully installed on your computer.$\r$\n$\r$\nClick Finish to close this wizard."
+!define MUI_FINISHPAGE_RUN "$INSTDIR\PHat5.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "Launch PHat5"
+!define MUI_FINISHPAGE_LINK "Visit the PHat5 website"
+!define MUI_FINISHPAGE_LINK_LOCATION "https://github.com/Lancej1011/Power-Hour-at-5"
 
 # Pages
 !insertmacro MUI_PAGE_WELCOME

@@ -58,7 +58,29 @@ export class AuthService {
     return isFirebaseConfigured() && !!auth && !!db;
   }
 
+  // Check if running in Electron environment
+  public isElectronEnvironment(): boolean {
+    return typeof window !== 'undefined' && (
+      window.location.protocol === 'file:' ||
+      window.location.protocol.startsWith('app:') ||
+      window.location.protocol.startsWith('electron:') ||
+      typeof window.require !== 'undefined'
+    );
+  }
 
+  // Get user authentication type
+  public getUserType(): string {
+    if (typeof localStorage !== 'undefined') {
+      return localStorage.getItem('phat5_user_type') || 'unknown';
+    }
+    return 'unknown';
+  }
+
+  // Check if user is using Electron anonymous mode
+  public isElectronAnonymousUser(): boolean {
+    const userType = this.getUserType();
+    return userType === 'electron_anonymous' || userType === 'anonymous_fallback';
+  }
 
   // Sign in with Google
   public async signInWithGoogle(): Promise<User | null> {
@@ -67,14 +89,83 @@ export class AuthService {
       return null;
     }
 
+    // Check if we're in Electron environment
+    const isElectron = typeof window !== 'undefined' && (
+      window.location.protocol === 'file:' ||
+      window.location.protocol.startsWith('app:') ||
+      window.location.protocol.startsWith('electron:') ||
+      typeof window.require !== 'undefined'
+    );
+
+    if (isElectron) {
+      console.log('🔧 Electron environment detected - using alternative authentication');
+      console.log('🔄 Attempting anonymous sign-in for Electron compatibility...');
+
+      try {
+        // For Electron, use anonymous authentication as primary method
+        // This avoids domain authorization issues entirely
+        const anonymousResult = await this.signInAnonymously();
+        if (anonymousResult) {
+          console.log('✅ Anonymous authentication successful in Electron');
+
+          // Store a flag indicating this is an Electron user
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('phat5_electron_user', 'true');
+            localStorage.setItem('phat5_user_type', 'electron_anonymous');
+          }
+
+          return anonymousResult;
+        }
+      } catch (anonymousError) {
+        console.error('❌ Anonymous sign-in failed in Electron:', anonymousError);
+      }
+    }
+
+    // Try Google sign-in for web environments or as fallback
     try {
       const provider = new GoogleAuthProvider();
+
+      // Add custom parameters
+      provider.setCustomParameters({
+        prompt: 'select_account'
+      });
+
       const result = await signInWithPopup(auth!, provider);
       await this.createOrUpdateUserProfile(result.user, false);
       console.log('✅ Signed in with Google');
       return result.user;
     } catch (error) {
       console.error('❌ Error signing in with Google:', error);
+
+      // Handle specific Electron auth errors
+      if (error.code === 'auth/unauthorized-domain') {
+        console.error('🔥 Firebase domain not authorized for Google sign-in');
+        console.error('🔧 Current location:', window.location.href);
+        console.error('🔧 Add these domains to Firebase Console → Authentication → Settings → Authorized domains:');
+        console.error('   ✅ localhost');
+        console.error('   ✅ 127.0.0.1');
+
+        // Try anonymous sign-in as fallback
+        console.log('🔄 Attempting anonymous sign-in as fallback...');
+        try {
+          const anonymousResult = await this.signInAnonymously();
+          if (anonymousResult) {
+            console.log('✅ Fallback anonymous sign-in successful');
+
+            // Store user type
+            if (typeof localStorage !== 'undefined') {
+              localStorage.setItem('phat5_user_type', 'anonymous_fallback');
+            }
+
+            return anonymousResult;
+          }
+        } catch (anonymousError) {
+          console.error('❌ Anonymous sign-in fallback also failed:', anonymousError);
+        }
+
+        throw new Error('Authentication domain not authorized. The app is running with limited authentication. Add localhost and 127.0.0.1 to Firebase Console for full functionality.');
+      }
+
       throw error;
     }
   }
