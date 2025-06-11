@@ -301,7 +301,14 @@ export const filterSharedPlaylists = (
   playlists: SharedPlaylist[],
   filters: SharedPlaylistFilters
 ): SharedPlaylist[] => {
-  let filtered = [...playlists];
+  try {
+    // Ensure playlists is an array
+    if (!Array.isArray(playlists)) {
+      console.warn('filterSharedPlaylists: playlists is not an array, returning empty array');
+      return [];
+    }
+
+    let filtered = [...playlists];
 
   // Category filter
   if (filters.category) {
@@ -326,32 +333,61 @@ export const filterSharedPlaylists = (
 
   // Tags filter
   if (filters.tags && filters.tags.length > 0) {
-    filtered = filtered.filter(p => 
-      filters.tags!.some(tag => p.tags.includes(tag))
-    );
+    filtered = filtered.filter(p => {
+      try {
+        return p && Array.isArray(p.tags) && filters.tags!.some(tag => p.tags.includes(tag));
+      } catch (error) {
+        console.error('Error filtering by tags:', error);
+        return false;
+      }
+    });
   }
 
   // Minimum rating filter
   if (filters.minRating) {
-    filtered = filtered.filter(p => p.rating >= filters.minRating!);
+    filtered = filtered.filter(p => {
+      try {
+        return p && typeof p.rating === 'number' && p.rating >= filters.minRating!;
+      } catch (error) {
+        console.error('Error filtering by rating:', error);
+        return false;
+      }
+    });
   }
 
   // Creator filter
   if (filters.creator) {
-    filtered = filtered.filter(p => 
-      p.creator.toLowerCase().includes(filters.creator!.toLowerCase())
-    );
+    filtered = filtered.filter(p => {
+      try {
+        return p && p.creator && p.creator.toLowerCase().includes(filters.creator!.toLowerCase());
+      } catch (error) {
+        console.error('Error filtering by creator:', error);
+        return false;
+      }
+    });
   }
 
   // Search query filter
   if (filters.searchQuery) {
     const query = filters.searchQuery.toLowerCase();
-    filtered = filtered.filter(p => 
-      p.name.toLowerCase().includes(query) ||
-      p.description.toLowerCase().includes(query) ||
-      p.creator.toLowerCase().includes(query) ||
-      p.tags.some(tag => tag.toLowerCase().includes(query))
-    );
+    filtered = filtered.filter(p => {
+      try {
+        if (!p) return false;
+
+        const name = (p.name || '').toLowerCase();
+        const description = (p.description || '').toLowerCase();
+        const creator = (p.creator || '').toLowerCase();
+        const tags = Array.isArray(p.tags) ? p.tags.join(' ').toLowerCase() : '';
+
+        return name.includes(query) ||
+               description.includes(query) ||
+               creator.includes(query) ||
+               tags.includes(query);
+      } catch (error) {
+        console.error('Error filtering by search query:', error);
+        return false;
+      }
+    });
   }
 
   // Sorting
@@ -389,30 +425,74 @@ export const filterSharedPlaylists = (
   }
 
   return filtered;
+  } catch (error) {
+    console.error('Error in filterSharedPlaylists:', error);
+    return [];
+  }
 };
 
 // Get all unique tags from shared playlists
 export const getAllTags = (playlists?: SharedPlaylist[]): string[] => {
-  const playlistsToUse = playlists || getSharedPlaylistsLocal();
-  const tagSet = new Set<string>();
+  try {
+    const playlistsToUse = playlists || getSharedPlaylistsLocal();
 
-  playlistsToUse.forEach(playlist => {
-    playlist.tags.forEach(tag => tagSet.add(tag));
-  });
+    // Ensure we have an array
+    if (!Array.isArray(playlistsToUse)) {
+      console.warn('getAllTags: playlistsToUse is not an array, returning empty array');
+      return [];
+    }
 
-  return Array.from(tagSet).sort();
+    const tagSet = new Set<string>();
+
+    playlistsToUse.forEach(playlist => {
+      try {
+        if (playlist && Array.isArray(playlist.tags)) {
+          playlist.tags.forEach(tag => {
+            if (tag && typeof tag === 'string') {
+              tagSet.add(tag);
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Error processing playlist tags:', error);
+      }
+    });
+
+    return Array.from(tagSet).sort();
+  } catch (error) {
+    console.error('Error in getAllTags:', error);
+    return [];
+  }
 };
 
 // Get all unique creators
 export const getAllCreators = (playlists?: SharedPlaylist[]): string[] => {
-  const playlistsToUse = playlists || getSharedPlaylistsLocal();
-  const creatorSet = new Set<string>();
+  try {
+    const playlistsToUse = playlists || getSharedPlaylistsLocal();
 
-  playlistsToUse.forEach(playlist => {
-    creatorSet.add(playlist.creator);
-  });
+    // Ensure we have an array
+    if (!Array.isArray(playlistsToUse)) {
+      console.warn('getAllCreators: playlistsToUse is not an array, returning empty array');
+      return [];
+    }
 
-  return Array.from(creatorSet).sort();
+    const creatorSet = new Set<string>();
+
+    playlistsToUse.forEach(playlist => {
+      try {
+        if (playlist && playlist.creator && typeof playlist.creator === 'string') {
+          creatorSet.add(playlist.creator);
+        }
+      } catch (error) {
+        console.error('Error processing playlist creator:', error);
+      }
+    });
+
+    return Array.from(creatorSet).sort();
+  } catch (error) {
+    console.error('Error in getAllCreators:', error);
+    return [];
+  }
 };
 
 // Delete shared playlist

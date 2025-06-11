@@ -69,6 +69,11 @@ const SharedPlaylists: React.FC = () => {
   const [playlists, setPlaylists] = useState<SharedPlaylist[]>([]);
   const [userPlaylists, setUserPlaylists] = useState<SharedPlaylist[]>([]);
   const [filteredPlaylists, setFilteredPlaylists] = useState<SharedPlaylist[]>([]);
+
+  // Ensure arrays are always defined
+  const safePlaylists = Array.isArray(playlists) ? playlists : [];
+  const safeUserPlaylists = Array.isArray(userPlaylists) ? userPlaylists : [];
+  const safeFilteredPlaylists = Array.isArray(filteredPlaylists) ? filteredPlaylists : [];
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<PlaylistCategory>('featured');
   const [searchQuery, setSearchQuery] = useState('');
@@ -91,8 +96,23 @@ const SharedPlaylists: React.FC = () => {
   const [pendingPlaylistName, setPendingPlaylistName] = useState<string>('');
 
   // Get available filter options
-  const availableTags = useMemo(() => getAllTags(), [playlists]);
-  const availableCreators = useMemo(() => getAllCreators(), [playlists]);
+  const availableTags = useMemo(() => {
+    try {
+      return getAllTags(safePlaylists);
+    } catch (error) {
+      console.error('Error getting available tags:', error);
+      return [];
+    }
+  }, [safePlaylists]);
+
+  const availableCreators = useMemo(() => {
+    try {
+      return getAllCreators(safePlaylists);
+    } catch (error) {
+      console.error('Error getting available creators:', error);
+      return [];
+    }
+  }, [safePlaylists]);
 
   // Load playlists on component mount and when category changes
   useEffect(() => {
@@ -266,57 +286,75 @@ const SharedPlaylists: React.FC = () => {
   };
 
   const applyFilters = () => {
-    // Use user playlists for "my-playlists" category, otherwise use public playlists
-    let sourcePlaylist = selectedCategory === 'my-playlists' ? userPlaylists : playlists;
+    try {
+      // Use user playlists for "my-playlists" category, otherwise use public playlists
+      let sourcePlaylist = selectedCategory === 'my-playlists' ? safeUserPlaylists : safePlaylists;
 
-    // For "my-playlists", ensure we only show playlists owned by the current user
-    // and avoid duplicates by filtering out any that appear in both arrays
-    if (selectedCategory === 'my-playlists') {
-      sourcePlaylist = userPlaylists;
-    } else {
-      // For community playlists, exclude user's own playlists to avoid duplicates
-      const currentUser = authService.getCurrentUser();
-      if (currentUser) {
-        sourcePlaylist = playlists.filter(playlist =>
-          !userPlaylists.some(userPlaylist => userPlaylist.id === playlist.id)
-        );
+      // For "my-playlists", ensure we only show playlists owned by the current user
+      // and avoid duplicates by filtering out any that appear in both arrays
+      if (selectedCategory === 'my-playlists') {
+        sourcePlaylist = safeUserPlaylists;
       } else {
-        sourcePlaylist = playlists;
+        // For community playlists, exclude user's own playlists to avoid duplicates
+        const currentUser = authService.getCurrentUser();
+        if (currentUser && safeUserPlaylists.length > 0) {
+          sourcePlaylist = safePlaylists.filter(playlist =>
+            !safeUserPlaylists.some(userPlaylist => userPlaylist.id === playlist.id)
+          );
+        } else {
+          sourcePlaylist = safePlaylists;
+        }
       }
+
+      // Ensure sourcePlaylist is an array
+      if (!Array.isArray(sourcePlaylist)) {
+        console.warn('sourcePlaylist is not an array, using empty array');
+        sourcePlaylist = [];
+      }
+
+      // Debug logging to understand duplicate issues
+      console.log('🔍 Filtering Debug:', {
+        selectedCategory,
+        sourcePlaylistCount: sourcePlaylist.length,
+        sourcePlaylistIds: sourcePlaylist.map(p => p?.id || 'unknown'),
+        duplicateIds: sourcePlaylist.map(p => p?.id || 'unknown').filter((id, index, arr) => arr.indexOf(id) !== index)
+      });
+
+      const filters: SharedPlaylistFilters = {
+        category: selectedCategory === 'my-playlists' ? 'new' : selectedCategory, // Treat my-playlists as 'new' for filtering
+        searchQuery: searchQuery || undefined,
+        tags: selectedTags.length > 0 ? selectedTags : undefined,
+        creator: selectedCreator || undefined,
+        minRating: minRating > 0 ? minRating : undefined,
+        sortBy,
+        sortOrder,
+      };
+
+      const filtered = filterSharedPlaylists(sourcePlaylist, filters);
+
+      // Ensure filtered is an array before processing
+      if (!Array.isArray(filtered)) {
+        console.warn('filterSharedPlaylists returned non-array, using empty array');
+        setFilteredPlaylists([]);
+        return;
+      }
+
+      // Remove any potential duplicates based on ID
+      const uniqueFiltered = filtered.filter((playlist, index, arr) =>
+        playlist && playlist.id && arr.findIndex(p => p && p.id === playlist.id) === index
+      );
+
+      console.log('🔍 Filter Results:', {
+        beforeDedup: filtered.length,
+        afterDedup: uniqueFiltered.length,
+        removedDuplicates: filtered.length - uniqueFiltered.length
+      });
+
+      setFilteredPlaylists(uniqueFiltered);
+    } catch (error) {
+      console.error('Error in applyFilters:', error);
+      setFilteredPlaylists([]);
     }
-
-    // Debug logging to understand duplicate issues
-    console.log('🔍 Filtering Debug:', {
-      selectedCategory,
-      sourcePlaylistCount: sourcePlaylist.length,
-      sourcePlaylistIds: sourcePlaylist.map(p => p.id),
-      duplicateIds: sourcePlaylist.map(p => p.id).filter((id, index, arr) => arr.indexOf(id) !== index)
-    });
-
-    const filters: SharedPlaylistFilters = {
-      category: selectedCategory === 'my-playlists' ? 'new' : selectedCategory, // Treat my-playlists as 'new' for filtering
-      searchQuery: searchQuery || undefined,
-      tags: selectedTags.length > 0 ? selectedTags : undefined,
-      creator: selectedCreator || undefined,
-      minRating: minRating > 0 ? minRating : undefined,
-      sortBy,
-      sortOrder,
-    };
-
-    const filtered = filterSharedPlaylists(sourcePlaylist, filters);
-
-    // Remove any potential duplicates based on ID
-    const uniqueFiltered = filtered.filter((playlist, index, arr) =>
-      arr.findIndex(p => p.id === playlist.id) === index
-    );
-
-    console.log('🔍 Filter Results:', {
-      beforeDedup: filtered.length,
-      afterDedup: uniqueFiltered.length,
-      removedDuplicates: filtered.length - uniqueFiltered.length
-    });
-
-    setFilteredPlaylists(uniqueFiltered);
   };
 
   const handleImport = async (playlist: SharedPlaylist) => {

@@ -208,6 +208,7 @@ export const LibraryProvider: React.FC<LibraryProviderProps> = ({ children, show
         setLibrarySongs([]);
         setLibraryLoading(false);
         setLibraryProgress(null);
+        setLibraryError(null);
         return;
       }
 

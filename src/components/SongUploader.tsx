@@ -2129,22 +2129,27 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
       const field = librarySort.field;
       const dir = librarySort.direction === 'asc' ? 1 : -1;
 
+      // Ensure librarySongs is an array
+      const safeLibrarySongs = Array.isArray(librarySongs) ? librarySongs : [];
+
       // Start with all songs
-      let filtered = librarySongs;
+      let filtered = safeLibrarySongs;
 
       // Apply basic search term - optimized for performance
       if (debouncedSearch.trim()) {
         const searchTerm = debouncedSearch.toLowerCase().trim();
 
         // Simple but fast search - just use includes for better performance
-        filtered = librarySongs.filter(song => {
+        filtered = safeLibrarySongs.filter(song => {
           try {
+            if (!song) return false;
+
             const title = (song.title || song.name || '').toLowerCase();
             const artist = (song.artist || '').toLowerCase();
             const album = (song.album || '').toLowerCase();
             const genre = (song.genre || '').toLowerCase();
             const year = (song.year || '').toLowerCase();
-            const tags = (song.tags || []).join(' ').toLowerCase();
+            const tags = Array.isArray(song.tags) ? song.tags.join(' ').toLowerCase() : '';
 
             return (
               title.includes(searchTerm) ||
@@ -2165,19 +2170,20 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
       activeQuickFilters.forEach(filterId => {
         try {
           if (filterId === 'favorites') {
-            filtered = filtered.filter(song => favoriteTracks.has(song.path));
+            filtered = filtered.filter(song => song && favoriteTracks.has(song.path));
           } else if (filterId === 'recent') {
-            const recentPaths = new Set(recentlyPlayed.map(s => s.path));
-            filtered = filtered.filter(song => recentPaths.has(song.path));
+            const safeRecentlyPlayed = Array.isArray(recentlyPlayed) ? recentlyPlayed : [];
+            const recentPaths = new Set(safeRecentlyPlayed.map(s => s?.path).filter(Boolean));
+            filtered = filtered.filter(song => song && recentPaths.has(song.path));
           } else if (filterId.startsWith('genre:')) {
             const genre = filterId.replace('genre:', '');
             filtered = filtered.filter(song =>
-              (song.genre || '').toLowerCase().includes(genre.toLowerCase())
+              song && (song.genre || '').toLowerCase().includes(genre.toLowerCase())
             );
           } else if (filterId.startsWith('year:')) {
             const year = filterId.replace('year:', '');
             filtered = filtered.filter(song =>
-              (song.year || '').includes(year)
+              song && (song.year || '').includes(year)
             );
           }
         } catch (error) {
@@ -2188,6 +2194,8 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
       // Sort the filtered results
       return [...filtered].sort((a, b) => {
         try {
+          if (!a || !b) return 0;
+
           let aVal, bVal;
 
           if (field === 'tags') {
@@ -2213,7 +2221,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
       });
     } catch (error) {
       console.error('Error in sortedLibrarySongs:', error);
-      return librarySongs; // Return original list if there's an error
+      return Array.isArray(librarySongs) ? librarySongs : []; // Return safe array if there's an error
     }
   }, [librarySongs, librarySort, debouncedSearch, activeQuickFilters, favoriteTracks, recentlyPlayed]);
 

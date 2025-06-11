@@ -10,7 +10,7 @@
     "start": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && npm run dev:electron\"",
     "build": "tsc -b && vite build",
     "build:prod": "cross-env NODE_ENV=production npm run build",
-    "build:web": "vite build --config vite.config.web.ts && node -e \"const fs = require('fs'); if (fs.existsSync('dist-web/index.web.html')) { fs.renameSync('dist-web/index.web.html', 'dist-web/index.html'); }\"",
+    "build:web": "vite build --config vite.config.web.ts && node scripts/fix-sw.js",
     "build:web:prod": "cross-env NODE_ENV=production npm run build:web",
     "preview:web": "vite preview --config vite.config.web.ts",
     "lint": "eslint .",

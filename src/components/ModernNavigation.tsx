@@ -70,29 +70,45 @@ const ModernNavigation: React.FC<ModernNavigationProps> = ({
   const [loginModalOpen, setLoginModalOpen] = useState(false);
 
   // Filter tabs based on authentication requirements
-  const visibleTabs = tabs.filter(tab => {
-    if (!enableAuthenticationAwareness) return true;
+  const visibleTabs = React.useMemo(() => {
+    try {
+      // Ensure tabs is an array
+      const safeTabs = Array.isArray(tabs) ? tabs : [];
 
-    // Hide tabs that require authentication if user is not authenticated
-    if (tab.requireAuth && !isAuthenticated) {
-      return false;
+      return safeTabs.filter(tab => {
+        try {
+          if (!tab) return false;
+          if (!enableAuthenticationAwareness) return true;
+
+          // Hide tabs that require authentication if user is not authenticated
+          if (tab.requireAuth && !isAuthenticated) {
+            return false;
+          }
+
+          // Hide tabs that require non-anonymous account if user is anonymous
+          if (tab.requireNonAnonymous && (!isAuthenticated || isAnonymous)) {
+            return false;
+          }
+
+          return true;
+        } catch (error) {
+          console.error('Error filtering tab:', error);
+          return false;
+        }
+      });
+    } catch (error) {
+      console.error('Error in visibleTabs filter:', error);
+      return [];
     }
+  }, [tabs, enableAuthenticationAwareness, isAuthenticated, isAnonymous]);
 
-    // Hide tabs that require non-anonymous account if user is anonymous
-    if (tab.requireNonAnonymous && (!isAuthenticated || isAnonymous)) {
-      return false;
-    }
-
-    return true;
-  });
-
-  console.log('ModernNavigation - All tabs:', tabs.map(t => t.value));
-  console.log('ModernNavigation - Visible tabs:', visibleTabs.map(t => t.value));
+  console.log('ModernNavigation - All tabs:', Array.isArray(tabs) ? tabs.map(t => t?.value || 'unknown') : []);
+  console.log('ModernNavigation - Visible tabs:', Array.isArray(visibleTabs) ? visibleTabs.map(t => t?.value || 'unknown') : []);
   console.log('ModernNavigation - Current tab:', currentTab);
 
   const handleChange = (_event: React.SyntheticEvent, newValue: number) => {
     console.log('ModernNavigation handleChange - newValue:', newValue);
-    console.log('ModernNavigation handleChange - visibleTabs:', visibleTabs.map(t => t.value));
+    console.log('ModernNavigation handleChange - visibleTabs:', Array.isArray(visibleTabs) ? visibleTabs.map(t => t?.value || 'unknown') : []);
 
     // Get the tab value from the filtered visible tabs
     const tabValue = visibleTabs[newValue]?.value;

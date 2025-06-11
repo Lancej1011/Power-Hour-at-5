@@ -216,34 +216,57 @@ const YouTubeDrinkingSoundManager: React.FC<YouTubeDrinkingSoundManagerProps> = 
 
   // Filter and sort drinking sounds
   const filteredAndSortedSounds = React.useMemo(() => {
-    let filtered = drinkingSounds;
+    try {
+      // Ensure drinkingSounds is an array
+      const safeDrinkingSounds = Array.isArray(drinkingSounds) ? drinkingSounds : [];
+      let filtered = safeDrinkingSounds;
 
-    // Apply search filter
-    if (searchFilter.trim()) {
-      const searchTerm = searchFilter.toLowerCase();
-      filtered = filtered.filter(sound =>
-        sound.name.toLowerCase().includes(searchTerm) ||
-        sound.type.toLowerCase().includes(searchTerm)
-      );
-    }
-
-    // Apply sorting
-    filtered.sort((a, b) => {
-      switch (sortBy) {
-        case 'name':
-          return a.name.localeCompare(b.name);
-        case 'type':
-          return a.type.localeCompare(b.type);
-        case 'duration':
-          return (a.duration || 0) - (b.duration || 0);
-        case 'recent':
-        default:
-          // Most recently added first (by array order)
-          return drinkingSounds.indexOf(b) - drinkingSounds.indexOf(a);
+      // Apply search filter
+      if (searchFilter.trim()) {
+        const searchTerm = searchFilter.toLowerCase();
+        filtered = filtered.filter(sound => {
+          try {
+            return sound &&
+                   sound.name &&
+                   sound.type &&
+                   (sound.name.toLowerCase().includes(searchTerm) ||
+                    sound.type.toLowerCase().includes(searchTerm));
+          } catch (error) {
+            console.error('Error filtering drinking sound:', error);
+            return false;
+          }
+        });
       }
-    });
 
-    return filtered;
+      // Apply sorting
+      filtered.sort((a, b) => {
+        try {
+          if (!a || !b) return 0;
+
+          switch (sortBy) {
+            case 'name':
+              return (a.name || '').localeCompare(b.name || '');
+            case 'type':
+              return (a.type || '').localeCompare(b.type || '');
+            case 'duration':
+              return (a.duration || 0) - (b.duration || 0);
+            case 'recent':
+            default:
+              // Most recently added first (by array order)
+              const safeDrinkingSounds = Array.isArray(drinkingSounds) ? drinkingSounds : [];
+              return safeDrinkingSounds.indexOf(b) - safeDrinkingSounds.indexOf(a);
+          }
+        } catch (error) {
+          console.error('Error sorting drinking sounds:', error);
+          return 0;
+        }
+      });
+
+      return filtered;
+    } catch (error) {
+      console.error('Error in filteredAndSortedSounds:', error);
+      return [];
+    }
   }, [drinkingSounds, searchFilter, sortBy]);
 
   // Clip selection and deletion helpers
