@@ -6,12 +6,24 @@ import {
 } from './sharedPlaylistUtils';
 import { recordPlaylistDownload } from './playlistRating';
 
+// Interface for drinking clip data
+export interface DrinkingClipData {
+  type: 'audio' | 'youtube';
+  path?: string;
+  name: string;
+  youtubeId?: string;
+  duration?: number;
+  startTime?: number;
+}
+
 // Import result interface
 export interface ImportResult {
   success: boolean;
   playlist?: YouTubePlaylist;
   message: string;
   warnings?: string[];
+  drinkingClip?: DrinkingClipData;
+  hasNewDrinkingClip?: boolean;
 }
 
 // Validate YouTube clip
@@ -35,6 +47,92 @@ const validateSharedPlaylist = (playlist: SharedPlaylist): boolean => {
 
   // Check if all clips are valid
   return playlist.clips.every(validateYouTubeClip);
+};
+
+// Extract drinking clip data from playlist
+const extractDrinkingClipData = (playlist: SharedPlaylist): DrinkingClipData | null => {
+  if (!playlist.drinkingSoundPath) {
+    return null;
+  }
+
+  try {
+    // Try to parse as JSON first (new format)
+    const drinkingData = JSON.parse(playlist.drinkingSoundPath);
+    return {
+      type: drinkingData.type || 'audio',
+      path: drinkingData.path,
+      name: drinkingData.name || 'Imported Drinking Clip',
+      youtubeId: drinkingData.youtubeId,
+      duration: drinkingData.duration,
+      startTime: drinkingData.startTime,
+    };
+  } catch {
+    // Legacy format - simple path
+    return {
+      type: 'audio',
+      path: playlist.drinkingSoundPath,
+      name: 'Imported Drinking Clip',
+    };
+  }
+};
+
+// Check if drinking clip already exists in user's library
+const isDrinkingClipInLibrary = (clipData: DrinkingClipData): boolean => {
+  try {
+    const saved = localStorage.getItem('drinking_clips_library');
+    if (!saved) return false;
+
+    const library = JSON.parse(saved);
+    return library.some((clip: any) => {
+      if (clipData.type === 'youtube' && clip.type === 'youtube') {
+        return clip.youtubeId === clipData.youtubeId &&
+               clip.startTime === clipData.startTime &&
+               clip.duration === clipData.duration;
+      } else if (clipData.type === 'audio' && clip.type === 'audio') {
+        return clip.name === clipData.name;
+      }
+      return false;
+    });
+  } catch (error) {
+    console.error('Error checking drinking clip library:', error);
+    return false;
+  }
+};
+
+// Add drinking clip to user's library
+export const addDrinkingClipToLibrary = (clipData: DrinkingClipData): boolean => {
+  try {
+    // Check if already exists
+    if (isDrinkingClipInLibrary(clipData)) {
+      console.log('Drinking clip already exists in library');
+      return true;
+    }
+
+    // Get current library
+    const saved = localStorage.getItem('drinking_clips_library');
+    const library = saved ? JSON.parse(saved) : [];
+
+    // Create new clip entry
+    const newClip = {
+      id: Math.random().toString(36).substr(2, 9),
+      name: clipData.name,
+      type: clipData.type,
+      youtubeId: clipData.youtubeId,
+      duration: clipData.duration,
+      startTime: clipData.startTime,
+      path: clipData.path,
+    };
+
+    // Add to library
+    library.push(newClip);
+    localStorage.setItem('drinking_clips_library', JSON.stringify(library));
+
+    console.log('Added drinking clip to library:', newClip);
+    return true;
+  } catch (error) {
+    console.error('Error adding drinking clip to library:', error);
+    return false;
+  }
 };
 
 // Convert shared playlist to regular YouTube playlist
@@ -74,6 +172,10 @@ export const importPlaylistByCode = async (shareCode: string): Promise<ImportRes
       };
     }
 
+    // Extract drinking clip data if present
+    const drinkingClip = extractDrinkingClipData(hybridResult.playlist);
+    const hasNewDrinkingClip = drinkingClip && !isDrinkingClipInLibrary(drinkingClip);
+
     // Convert to regular playlist
     const regularPlaylist = convertSharedToRegular(hybridResult.playlist);
 
@@ -91,6 +193,8 @@ export const importPlaylistByCode = async (shareCode: string): Promise<ImportRes
       success: true,
       playlist: regularPlaylist,
       message: `Successfully imported "${hybridResult.playlist.name}" with ${hybridResult.playlist.clips.length} clips.`,
+      drinkingClip,
+      hasNewDrinkingClip,
     };
   } catch (error) {
     console.error('Error importing playlist by code:', error);
@@ -112,12 +216,16 @@ export const importSharedPlaylist = async (sharedPlaylist: SharedPlaylist): Prom
       };
     }
 
+    // Extract drinking clip data if present
+    const drinkingClip = extractDrinkingClipData(sharedPlaylist);
+    const hasNewDrinkingClip = drinkingClip && !isDrinkingClipInLibrary(drinkingClip);
+
     // Convert to regular playlist
     const regularPlaylist = convertSharedToRegular(sharedPlaylist);
 
     // Save the playlist
     const saveSuccess = saveYouTubePlaylist(regularPlaylist);
-    
+
     if (!saveSuccess) {
       return {
         success: false,
@@ -132,6 +240,8 @@ export const importSharedPlaylist = async (sharedPlaylist: SharedPlaylist): Prom
       success: true,
       playlist: regularPlaylist,
       message: `Successfully imported "${sharedPlaylist.name}" with ${sharedPlaylist.clips.length} clips.`,
+      drinkingClip,
+      hasNewDrinkingClip,
     };
   } catch (error) {
     console.error('Error importing shared playlist:', error);

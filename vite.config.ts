@@ -38,7 +38,6 @@ export default defineConfig({
   // Performance optimizations
   server: {
     port: 5173,
-    strictPort: true, // Exit if port is already in use
     fs: {
       // Allow serving files from one level up to the project root
       allow: ['..'],

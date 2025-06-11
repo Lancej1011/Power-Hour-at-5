@@ -105,6 +105,7 @@ interface ElectronAPI {
   ytDlpChannelSearch: (query: string, maxResults: number, pageToken?: string, sortOrder?: string) => Promise<{ success: boolean; data?: any; error?: string }>;
   ytDlpChannelVideos: (channelId: string, maxResults: number, pageToken?: string) => Promise<{ success: boolean; data?: any; error?: string }>;
   ytDlpGetVideoDetails: (videoId: string) => Promise<{ success: boolean; data?: any; error?: string }>;
+  ytDlpGetPlaylistVideos: (playlistId: string, maxResults: number) => Promise<{ success: boolean; data?: any; totalVideos?: number; error?: string }>;
 }
 
 // Extend the Window interface to include our Electron API

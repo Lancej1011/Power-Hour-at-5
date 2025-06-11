@@ -67,5 +67,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ytDlpSearch: (query, maxResults) => ipcRenderer.invoke('yt-dlp-search', query, maxResults),
   ytDlpChannelSearch: (query, maxResults, pageToken, sortOrder) => ipcRenderer.invoke('yt-dlp-channel-search', query, maxResults, pageToken, sortOrder),
   ytDlpChannelVideos: (channelId, maxResults, pageToken) => ipcRenderer.invoke('yt-dlp-channel-videos', channelId, maxResults, pageToken),
-  ytDlpGetVideoDetails: (videoId) => ipcRenderer.invoke('yt-dlp-get-video-details', videoId)
+  ytDlpGetVideoDetails: (videoId) => ipcRenderer.invoke('yt-dlp-get-video-details', videoId),
+  ytDlpGetPlaylistVideos: (playlistId, maxResults) => ipcRenderer.invoke('yt-dlp-get-playlist-videos', playlistId, maxResults),
+
+  // Auto-updater operations
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
+  getCurrentVersion: () => ipcRenderer.invoke('get-current-version'),
+
+  // Auto-updater event listeners
+  onUpdateChecking: (callback) => ipcRenderer.on('update-checking', callback),
+  onUpdateAvailable: (callback) => ipcRenderer.on('update-available', callback),
+  onUpdateNotAvailable: (callback) => ipcRenderer.on('update-not-available', callback),
+  onUpdateError: (callback) => ipcRenderer.on('update-error', callback),
+  onUpdateProgress: (callback) => ipcRenderer.on('update-download-progress', callback),
+  onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', callback),
+
+  // Remove auto-updater event listeners
+  removeUpdateListener: (event, callback) => ipcRenderer.removeListener(event, callback),
+
+  // Version management operations
+  getVersionHistory: () => ipcRenderer.invoke('get-version-history'),
+  saveVersionHistory: (history) => ipcRenderer.invoke('save-version-history', history),
+  createVersionBackup: (version) => ipcRenderer.invoke('create-version-backup', version),
+  rollbackToVersion: (version, backupPath) => ipcRenderer.invoke('rollback-to-version', version, backupPath),
+  deleteVersionBackup: (backupPath) => ipcRenderer.invoke('delete-version-backup', backupPath)
 });

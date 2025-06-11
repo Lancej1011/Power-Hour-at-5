@@ -117,11 +117,20 @@ const DrinkingSoundManager: React.FC<DrinkingSoundManagerProps> = ({
     setSelectedSound(randomSound.id);
   };
 
-  // Clear all sounds
+  // State for confirmation dialog
+  const [clearAllDialogOpen, setClearAllDialogOpen] = useState(false);
+
+  // Clear all sounds with confirmation
   const clearAllSounds = () => {
+    setClearAllDialogOpen(true);
+  };
+
+  // Confirm clear all sounds
+  const confirmClearAllSounds = () => {
     stopPreview();
     setDrinkingSounds([]);
     setSelectedSound(null);
+    setClearAllDialogOpen(false);
   };
 
   // Handle save and close
@@ -288,6 +297,85 @@ const DrinkingSoundManager: React.FC<DrinkingSoundManagerProps> = ({
           {selectedSound ? 'Save Selection' : 'Remove Drinking Sound'}
         </Button>
       </DialogActions>
+
+      {/* Clear All Confirmation Dialog */}
+      <Dialog
+        open={clearAllDialogOpen}
+        onClose={() => setClearAllDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 3,
+            background: `linear-gradient(135deg, ${theme.palette.background.paper} 0%, ${theme.palette.background.default} 100%)`,
+            border: `1px solid ${theme.palette.divider}`,
+          }
+        }}
+      >
+        <DialogTitle sx={{
+          background: `linear-gradient(135deg, ${theme.palette.warning.main} 0%, ${theme.palette.error.main} 100%)`,
+          color: 'white',
+          borderRadius: '12px 12px 0 0',
+          mb: 0
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <ClearIcon sx={{ fontSize: 28 }} />
+            <Typography variant="h6" fontWeight="bold">
+              Clear All Drinking Sounds
+            </Typography>
+          </Box>
+        </DialogTitle>
+
+        <DialogContent sx={{ p: 3 }}>
+          <Alert severity="warning" sx={{ mb: 3 }}>
+            <Typography variant="body1" fontWeight="bold" gutterBottom>
+              This action cannot be undone!
+            </Typography>
+            <Typography variant="body2">
+              You are about to permanently delete all {drinkingSounds.length} drinking sounds from this session.
+            </Typography>
+          </Alert>
+
+          <Typography variant="body1" color="text.secondary">
+            Are you sure you want to clear all drinking sounds?
+          </Typography>
+        </DialogContent>
+
+        <DialogActions sx={{ p: 3, gap: 2 }}>
+          <Button
+            onClick={() => setClearAllDialogOpen(false)}
+            variant="outlined"
+            sx={{
+              borderRadius: 2,
+              px: 3,
+              color: theme.palette.text.primary,
+              borderColor: theme.palette.divider,
+              '&:hover': {
+                borderColor: theme.palette.primary.main,
+                backgroundColor: `${theme.palette.primary.main}10`,
+              }
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={confirmClearAllSounds}
+            variant="contained"
+            color="error"
+            sx={{
+              borderRadius: 2,
+              px: 3,
+              fontWeight: 'bold',
+              background: `linear-gradient(135deg, ${theme.palette.error.main} 0%, ${theme.palette.error.dark} 100%)`,
+              '&:hover': {
+                background: `linear-gradient(135deg, ${theme.palette.error.dark} 0%, ${theme.palette.error.main} 100%)`,
+              }
+            }}
+          >
+            Clear All ({drinkingSounds.length} sounds)
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Dialog>
   );
 };

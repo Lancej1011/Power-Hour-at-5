@@ -124,6 +124,20 @@ export const createSharedPlaylist = (
   const userProfile = getUserProfile();
   const now = new Date().toISOString();
 
+  // Ensure drinking clip data is properly included
+  let drinkingSoundData = playlist.drinkingSoundPath;
+
+  // If the drinking sound path is a JSON string, preserve it as-is
+  // If it's a simple path, convert it to the new format for better compatibility
+  if (drinkingSoundData && !drinkingSoundData.startsWith('{')) {
+    // Legacy format - simple path, convert to structured format
+    drinkingSoundData = JSON.stringify({
+      type: 'audio',
+      path: drinkingSoundData,
+      name: 'Drinking Sound'
+    });
+  }
+
   return {
     ...playlist,
     isPublic,
@@ -136,7 +150,8 @@ export const createSharedPlaylist = (
     createdAt: playlist.createdAt || now,
     updatedAt: now,
     version: 1,
-    originalPlaylistId: playlist.id // Link to the original playlist
+    originalPlaylistId: playlist.id, // Link to the original playlist
+    drinkingSoundPath: drinkingSoundData // Ensure drinking sound data is included
   };
 };
 
@@ -208,28 +223,38 @@ export const getSharedPlaylistsLocal = (): SharedPlaylist[] => {
   }
 };
 
-// Hybrid: Get shared playlists (Firebase first, localStorage fallback)
+// Clear all shared playlists from localStorage
+export const clearSharedPlaylistsLocal = (): boolean => {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.SHARED_PLAYLISTS);
+    console.log('✅ Cleared all shared playlists from localStorage');
+    return true;
+  } catch (error) {
+    console.error('❌ Error clearing shared playlists from localStorage:', error);
+    return false;
+  }
+};
+
+// Get shared playlists from Firebase only (no localStorage fallback for community page)
 export const getSharedPlaylists = async (category?: PlaylistCategory): Promise<SharedPlaylist[]> => {
   try {
-    // Try Firebase first if available and authenticated
+    // Only load from Firebase if available and authenticated
     if (firebasePlaylistService.isAvailable() && authService.isAuthenticated()) {
       try {
         const firebasePlaylists = await firebasePlaylistService.getPlaylistsByCategory(category || 'new');
-        if (firebasePlaylists.length > 0) {
-          console.log(`✅ Loaded ${firebasePlaylists.length} playlists from Firebase`);
-          return firebasePlaylists;
-        }
+        console.log(`✅ Loaded ${firebasePlaylists.length} playlists from Firebase`);
+        return firebasePlaylists;
       } catch (firebaseError) {
-        console.warn('⚠️ Failed to load from Firebase, falling back to localStorage:', firebaseError);
+        console.warn('⚠️ Failed to load from Firebase:', firebaseError);
+        return [];
       }
     }
 
-    // Fallback to localStorage
-    const localPlaylists = getSharedPlaylistsLocal();
-    console.log(`ℹ️ Loaded ${localPlaylists.length} playlists from localStorage`);
-    return localPlaylists;
+    // No localStorage fallback for community page - return empty array
+    console.log('ℹ️ Firebase not available or user not authenticated - returning empty array');
+    return [];
   } catch (error) {
-    console.error('❌ Error in hybrid getSharedPlaylists:', error);
+    console.error('❌ Error in getSharedPlaylists:', error);
     return [];
   }
 };
@@ -241,6 +266,7 @@ export const getSharedPlaylistByCodeLocal = (shareCode: string): SharedPlaylist 
 };
 
 // Hybrid: Get shared playlist by share code (Firebase first, localStorage fallback)
+// This function is used for import functionality and should still check localStorage
 export const getSharedPlaylistByCode = async (shareCode: string): Promise<SharedPlaylist | null> => {
   try {
     // Try Firebase first if available
@@ -256,7 +282,7 @@ export const getSharedPlaylistByCode = async (shareCode: string): Promise<Shared
       }
     }
 
-    // Fallback to localStorage
+    // Fallback to localStorage for import functionality
     const localPlaylist = getSharedPlaylistByCodeLocal(shareCode);
     if (localPlaylist) {
       console.log('ℹ️ Found playlist by share code in localStorage');

@@ -179,6 +179,67 @@ export const getVideoDetailsWithYtDlp = async (videoId: string): Promise<YouTube
   }
 };
 
+// Get playlist videos using yt-dlp via Electron IPC
+export const getPlaylistVideosWithYtDlp = async (
+  playlistId: string,
+  maxResults: number = 50
+): Promise<YouTubeSearchResult> => {
+  try {
+    console.log('🎵 Getting playlist videos for:', playlistId, 'maxResults:', maxResults);
+
+    // Check if we're in Electron environment
+    if (!window.electronAPI?.ytDlpGetPlaylistVideos) {
+      throw new Error('yt-dlp not available: Electron API not found');
+    }
+
+    // Use Electron IPC to get playlist videos via main process
+    const result = await window.electronAPI.ytDlpGetPlaylistVideos(playlistId, maxResults);
+
+    if (!result.success) {
+      throw new Error(result.error || 'yt-dlp playlist extraction failed');
+    }
+
+    console.log('📊 yt-dlp returned playlist data:', result.data);
+
+    // Convert yt-dlp results to our format
+    const results = Array.isArray(result.data) ? result.data : [result.data];
+
+    const videos: YouTubeVideo[] = results
+      .filter(info => info && info.id) // Filter out invalid entries
+      .map((info: any, index: number) => {
+        const videoId = info.id || `playlist_video_${Date.now()}_${index}`;
+
+        return {
+          id: videoId,
+          title: info.title || info.fulltitle || 'Unknown Title',
+          channelTitle: info.uploader || info.channel || info.uploader_id || 'Unknown Channel',
+          duration: convertDuration(info.duration || 0),
+          thumbnail: info.thumbnail || info.thumbnails?.[0]?.url || `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`,
+          description: info.description || '',
+          publishedAt: info.upload_date ?
+            new Date(info.upload_date.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')).toISOString() :
+            new Date().toISOString(),
+          viewCount: formatViewCount(info.view_count || 0),
+          likeCount: formatViewCount(info.like_count || 0)
+        };
+      });
+
+    console.log('✅ Successfully processed', videos.length, 'videos from playlist');
+
+    return {
+      videos,
+      totalResults: result.totalVideos || videos.length,
+      resultsPerPage: maxResults,
+      nextPageToken: null, // Playlists are typically loaded all at once
+      source: 'yt-dlp-playlist'
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to get playlist videos:', error);
+    throw error;
+  }
+};
+
 // Check if yt-dlp is available via Electron IPC
 export const isYtDlpAvailable = async (forceCheck: boolean = false): Promise<boolean> => {
   try {

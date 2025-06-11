@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, globalShortcut } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const mm = require('music-metadata');
@@ -20,6 +21,21 @@ const logger = {
     console.error(`[ERROR] [${component}] ${message}`, data);
   }
 };
+
+// Auto-updater configuration
+autoUpdater.logger = logger;
+autoUpdater.autoDownload = false; // Don't auto-download, let user choose
+autoUpdater.autoInstallOnAppQuit = false; // Don't auto-install, let user choose
+
+// Configure update server
+if (process.env.NODE_ENV === 'production') {
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: 'Lancej1011',
+    repo: 'Power-Hour-at-5',
+    private: false
+  });
+}
 
 // Default paths
 const DEFAULT_APP_DATA_FOLDER = path.join(app.getPath('userData'), 'PowerHour');
@@ -203,6 +219,255 @@ app.whenReady().then(() => {
   loadMixFolder();
   loadLibraryFolder();
   createWindow();
+
+  // Initialize auto-updater in production
+  if (process.env.NODE_ENV === 'production') {
+    setupAutoUpdater();
+  }
+});
+
+// Auto-updater setup and event handlers
+function setupAutoUpdater() {
+  logger.info('Setting up auto-updater');
+
+  // Auto-updater events
+  autoUpdater.on('checking-for-update', () => {
+    logger.info('Checking for update...');
+    if (mainWindow) {
+      mainWindow.webContents.send('update-checking');
+    }
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    logger.info('Update available:', info);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-available', {
+        version: info.version,
+        releaseDate: info.releaseDate,
+        releaseNotes: info.releaseNotes,
+        size: info.files?.[0]?.size
+      });
+    }
+  });
+
+  autoUpdater.on('update-not-available', (info) => {
+    logger.info('Update not available:', info);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-not-available');
+    }
+  });
+
+  autoUpdater.on('error', (err) => {
+    logger.error('Update error:', err);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-error', err.message);
+    }
+  });
+
+  autoUpdater.on('download-progress', (progressObj) => {
+    logger.info('Download progress:', progressObj);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-download-progress', {
+        bytesPerSecond: progressObj.bytesPerSecond,
+        percent: progressObj.percent,
+        transferred: progressObj.transferred,
+        total: progressObj.total
+      });
+    }
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    logger.info('Update downloaded:', info);
+    if (mainWindow) {
+      mainWindow.webContents.send('update-downloaded', {
+        version: info.version,
+        releaseNotes: info.releaseNotes
+      });
+    }
+  });
+}
+
+// Auto-updater IPC handlers
+ipcMain.handle('check-for-updates', async () => {
+  try {
+    if (process.env.NODE_ENV !== 'production') {
+      return { available: false, message: 'Updates disabled in development' };
+    }
+
+    const result = await autoUpdater.checkForUpdates();
+    return {
+      available: result?.updateInfo ? true : false,
+      version: result?.updateInfo?.version,
+      releaseDate: result?.updateInfo?.releaseDate,
+      releaseNotes: result?.updateInfo?.releaseNotes,
+      size: result?.updateInfo?.files?.[0]?.size
+    };
+  } catch (error) {
+    logger.error('Check for updates failed:', error);
+    throw error;
+  }
+});
+
+ipcMain.handle('download-update', async () => {
+  try {
+    if (process.env.NODE_ENV !== 'production') {
+      throw new Error('Updates disabled in development');
+    }
+
+    await autoUpdater.downloadUpdate();
+    return true;
+  } catch (error) {
+    logger.error('Download update failed:', error);
+    throw error;
+  }
+});
+
+ipcMain.handle('install-update', async () => {
+  try {
+    if (process.env.NODE_ENV !== 'production') {
+      throw new Error('Updates disabled in development');
+    }
+
+    // This will quit and install the update
+    autoUpdater.quitAndInstall();
+    return true;
+  } catch (error) {
+    logger.error('Install update failed:', error);
+    throw error;
+  }
+});
+
+ipcMain.handle('get-current-version', () => {
+  return app.getVersion();
+});
+
+// Version management IPC handlers
+const VERSION_HISTORY_FILE = path.join(DEFAULT_APP_DATA_FOLDER, 'version-history.json');
+const BACKUPS_FOLDER = path.join(DEFAULT_APP_DATA_FOLDER, 'version-backups');
+
+// Ensure backups folder exists
+function ensureBackupsFolder() {
+  if (!fs.existsSync(BACKUPS_FOLDER)) {
+    fs.mkdirSync(BACKUPS_FOLDER, { recursive: true });
+  }
+}
+
+ipcMain.handle('get-version-history', async () => {
+  try {
+    if (fs.existsSync(VERSION_HISTORY_FILE)) {
+      const data = fs.readFileSync(VERSION_HISTORY_FILE, 'utf8');
+      return JSON.parse(data);
+    }
+    return [];
+  } catch (error) {
+    logger.error('Failed to load version history:', error);
+    return [];
+  }
+});
+
+ipcMain.handle('save-version-history', async (event, history) => {
+  try {
+    ensureDefaultFolders();
+    fs.writeFileSync(VERSION_HISTORY_FILE, JSON.stringify(history, null, 2));
+    return true;
+  } catch (error) {
+    logger.error('Failed to save version history:', error);
+    return false;
+  }
+});
+
+ipcMain.handle('create-version-backup', async (event, version) => {
+  try {
+    ensureBackupsFolder();
+
+    const backupFolder = path.join(BACKUPS_FOLDER, version);
+    const appPath = process.execPath;
+    const appDir = path.dirname(appPath);
+
+    // Create backup folder
+    if (!fs.existsSync(backupFolder)) {
+      fs.mkdirSync(backupFolder, { recursive: true });
+    }
+
+    // Copy current executable and resources
+    const backupExePath = path.join(backupFolder, path.basename(appPath));
+    fs.copyFileSync(appPath, backupExePath);
+
+    // Get backup size
+    const stats = fs.statSync(backupExePath);
+
+    logger.info(`Created backup for version ${version} at ${backupFolder}`);
+
+    return {
+      version,
+      backupPath: backupFolder,
+      backupDate: new Date().toISOString(),
+      size: stats.size
+    };
+  } catch (error) {
+    logger.error(`Failed to create backup for version ${version}:`, error);
+    return null;
+  }
+});
+
+ipcMain.handle('rollback-to-version', async (event, version, backupPath) => {
+  try {
+    logger.info(`Attempting rollback to version ${version} from ${backupPath}`);
+
+    if (!fs.existsSync(backupPath)) {
+      throw new Error(`Backup path does not exist: ${backupPath}`);
+    }
+
+    const backupExePath = path.join(backupPath, path.basename(process.execPath));
+    if (!fs.existsSync(backupExePath)) {
+      throw new Error(`Backup executable not found: ${backupExePath}`);
+    }
+
+    // Create a script to replace the current executable after app closes
+    const scriptPath = path.join(BACKUPS_FOLDER, 'rollback.bat');
+    const currentExePath = process.execPath;
+
+    const rollbackScript = `
+@echo off
+timeout /t 2 /nobreak > nul
+copy "${backupExePath}" "${currentExePath}" /y
+start "" "${currentExePath}"
+del "%~f0"
+`;
+
+    fs.writeFileSync(scriptPath, rollbackScript);
+
+    // Execute rollback script and quit
+    const { spawn } = require('child_process');
+    spawn('cmd', ['/c', scriptPath], {
+      detached: true,
+      stdio: 'ignore'
+    }).unref();
+
+    // Quit the app to allow rollback
+    setTimeout(() => {
+      app.quit();
+    }, 1000);
+
+    return true;
+  } catch (error) {
+    logger.error(`Rollback to version ${version} failed:`, error);
+    return false;
+  }
+});
+
+ipcMain.handle('delete-version-backup', async (event, backupPath) => {
+  try {
+    if (fs.existsSync(backupPath)) {
+      fs.rmSync(backupPath, { recursive: true, force: true });
+      logger.info(`Deleted version backup: ${backupPath}`);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    logger.error(`Failed to delete version backup ${backupPath}:`, error);
+    return false;
+  }
 });
 
 // Always return the default mix folder
@@ -3299,6 +3564,73 @@ ipcMain.handle('yt-dlp-get-video-details', async (event, videoId) => {
 
   } catch (error) {
     console.error('❌ Failed to get video details:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+// Get playlist videos using yt-dlp
+ipcMain.handle('yt-dlp-get-playlist-videos', async (event, playlistId, maxResults = 50) => {
+  try {
+    console.log('🎵 Getting playlist videos for:', playlistId, 'maxResults:', maxResults);
+
+    // First check if yt-dlp is available and get the correct Python command
+    const pythonCommands = ['python', 'python3', 'py'];
+    let workingPythonCmd = null;
+
+    for (const pythonCmd of pythonCommands) {
+      try {
+        await executeYtDlp(pythonCmd, ['--version']);
+        workingPythonCmd = pythonCmd;
+        break;
+      } catch (error) {
+        // Continue to next command
+      }
+    }
+
+    if (!workingPythonCmd) {
+      throw new Error('yt-dlp not available with any Python command');
+    }
+
+    // Construct playlist URL
+    const playlistUrl = `https://www.youtube.com/playlist?list=${playlistId}`;
+    console.log('🔍 Extracting playlist:', playlistUrl);
+
+    // Get playlist information using yt-dlp
+    const playlistInfo = await executeYtDlp(workingPythonCmd, [
+      playlistUrl,
+      '--flat-playlist',
+      '--dump-json',
+      '--no-download',
+      `--playlist-end=${maxResults}`,
+      '--extractor-args', 'youtube:skip=dash,hls'
+    ]);
+
+    console.log('📊 yt-dlp returned playlist data');
+
+    // Process the results
+    const results = Array.isArray(playlistInfo) ? playlistInfo : [playlistInfo];
+
+    // Filter out the playlist metadata entry and keep only video entries
+    const videoEntries = results.filter(item =>
+      item &&
+      item.id &&
+      item._type !== 'playlist' &&
+      !item.entries // This filters out the main playlist object
+    );
+
+    console.log(`✅ Successfully extracted ${videoEntries.length} videos from playlist`);
+
+    return {
+      success: true,
+      data: videoEntries,
+      totalVideos: videoEntries.length
+    };
+
+  } catch (error) {
+    console.error('❌ yt-dlp get playlist videos failed:', error);
     return {
       success: false,
       error: error.message

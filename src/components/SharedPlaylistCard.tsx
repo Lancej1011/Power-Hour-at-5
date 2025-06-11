@@ -39,14 +39,17 @@ import {
   Delete as DeleteIcon,
   Public as PublicIcon,
   Lock as PrivateIcon,
+  Share as ShareIcon,
 } from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
-import { SharedPlaylist, getUserProfile } from '../utils/sharedPlaylistUtils';
-import { getUserRating, ratePlaylist, hasUserDownloaded } from '../utils/playlistRating';
+import { SharedPlaylist, getUserProfile, getUserRating as getFirebaseUserRating, hasUserDownloaded as hasFirebaseUserDownloaded } from '../utils/sharedPlaylistUtils';
+import { getUserRating as getLocalUserRating, ratePlaylist as ratePlaylistLocal, hasUserDownloaded as hasLocalUserDownloaded } from '../utils/playlistRating';
 import { saveYouTubePlaylist } from '../utils/youtubeUtils';
 import { firebasePlaylistService } from '../services/firebasePlaylistService';
 import { authService } from '../services/authService';
+import { useAuth, useAuthStatus } from '../contexts/AuthContext';
 import PlaylistEditDialog from './PlaylistEditDialog';
+import SocialMediaShareDialog from './SocialMediaShareDialog';
 
 interface SharedPlaylistCardProps {
   playlist: SharedPlaylist;
@@ -68,19 +71,79 @@ const SharedPlaylistCard: React.FC<SharedPlaylistCardProps> = ({
   showOwnerActions = false,
 }) => {
   const theme = useTheme();
+  const { user, canAccessFeature } = useAuth();
+  const { isAuthenticated, isAnonymous, hasFullAccount } = useAuthStatus();
+
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [userRating, setUserRating] = useState(getUserRating(playlist.id)?.rating || 0);
-  const [isDownloaded, setIsDownloaded] = useState(hasUserDownloaded(playlist.id));
+  const [userRating, setUserRating] = useState(0);
+  const [isDownloaded, setIsDownloaded] = useState(false);
   const [isOwner, setIsOwner] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [canRate, setCanRate] = useState(false);
+  const [socialMediaDialogOpen, setSocialMediaDialogOpen] = useState(false);
+
+  // Check if user can rate playlists
+  useEffect(() => {
+    const checkRatingPermissions = () => {
+      // User can rate if they are authenticated and have a full account (not anonymous)
+      const canUserRate = isAuthenticated && hasFullAccount;
+      setCanRate(canUserRate);
+    };
+
+    checkRatingPermissions();
+  }, [isAuthenticated, hasFullAccount]);
+
+  // Load user rating and download status
+  useEffect(() => {
+    const loadUserData = async () => {
+      try {
+        // Only load rating if user can rate
+        if (canRate) {
+          // Load user rating (try both local and Firebase)
+          const localRating = getLocalUserRating(playlist.id);
+          if (localRating) {
+            setUserRating(localRating.rating);
+          } else {
+            // Try Firebase rating if available
+            try {
+              const firebaseRating = await getFirebaseUserRating(playlist.id);
+              if (firebaseRating) {
+                setUserRating(firebaseRating.rating);
+              }
+            } catch (error) {
+              console.warn('Failed to load Firebase rating:', error);
+            }
+          }
+        }
+
+        // Load download status (try both local and Firebase)
+        const localDownloaded = hasLocalUserDownloaded(playlist.id);
+        if (localDownloaded) {
+          setIsDownloaded(true);
+        } else {
+          // Try Firebase download status if available
+          try {
+            const firebaseDownloaded = await hasFirebaseUserDownloaded(playlist.id);
+            setIsDownloaded(firebaseDownloaded);
+          } catch (error) {
+            console.warn('Failed to load Firebase download status:', error);
+          }
+        }
+      } catch (error) {
+        console.error('Error loading user data:', error);
+      }
+    };
+
+    loadUserData();
+  }, [playlist.id, canRate]);
 
   // Check if current user owns this playlist
   useEffect(() => {
     const checkOwnership = async () => {
-      if (showOwnerActions && authService.isAuthenticated()) {
+      if (showOwnerActions && isAuthenticated) {
         try {
           // First try Firebase ownership check
           const ownershipStatus = await firebasePlaylistService.isPlaylistOwner(playlist.id);
@@ -105,7 +168,7 @@ const SharedPlaylistCard: React.FC<SharedPlaylistCardProps> = ({
       }
     };
     checkOwnership();
-  }, [playlist.id, showOwnerActions]);
+  }, [playlist.id, showOwnerActions, isAuthenticated]);
 
   // Get thumbnail from first clip or use default
   const thumbnail = playlist.clips.length > 0
@@ -120,14 +183,18 @@ const SharedPlaylistCard: React.FC<SharedPlaylistCardProps> = ({
   };
 
   // Handle rating change
-  const handleRatingChange = (newValue: number | null) => {
+  const handleRatingChange = async (newValue: number | null) => {
     if (newValue !== null) {
-      const success = ratePlaylist(playlist.id, newValue);
-      if (success) {
-        setUserRating(newValue);
-        console.log(`✅ Successfully rated playlist "${playlist.name}" with ${newValue} stars`);
-      } else {
-        console.error('Failed to rate playlist');
+      try {
+        const success = await ratePlaylistLocal(playlist.id, newValue);
+        if (success) {
+          setUserRating(newValue);
+          console.log(`✅ Successfully rated playlist "${playlist.name}" with ${newValue} stars`);
+        } else {
+          console.error('Failed to rate playlist');
+        }
+      } catch (error) {
+        console.error('Error rating playlist:', error);
       }
     }
   };
@@ -157,7 +224,9 @@ const SharedPlaylistCard: React.FC<SharedPlaylistCardProps> = ({
       console.log('🗑️ Attempting to delete playlist:', {
         id: playlist.id,
         name: playlist.name,
-        shareCode: playlist.shareCode
+        shareCode: playlist.shareCode,
+        firebaseId: (playlist as any).firebaseId,
+        originalPlaylistId: (playlist as any).originalPlaylistId
       });
 
       const success = await firebasePlaylistService.deletePlaylist(playlist.id);
@@ -169,6 +238,13 @@ const SharedPlaylistCard: React.FC<SharedPlaylistCardProps> = ({
         }
       } else {
         console.error('❌ Failed to delete playlist - service returned false');
+        console.error('🔍 Playlist data for debugging:', {
+          id: playlist.id,
+          type: typeof playlist.id,
+          length: playlist.id.length,
+          isFirebaseId: playlist.id.length === 20, // Firebase IDs are typically 20 characters
+          isYouTubeId: playlist.id.startsWith('youtube_playlist_')
+        });
       }
     } catch (error) {
       console.error('❌ Error deleting playlist:', error);
@@ -218,21 +294,9 @@ const SharedPlaylistCard: React.FC<SharedPlaylistCardProps> = ({
 
   // Handle import
   const handleImport = () => {
-    // Convert shared playlist back to regular YouTube playlist for import
-    const regularPlaylist = {
-      id: `imported_${playlist.id}_${Date.now()}`,
-      name: `${playlist.name} (Imported)`,
-      clips: playlist.clips,
-      drinkingSoundPath: playlist.drinkingSoundPath,
-      imagePath: playlist.imagePath,
-      date: new Date().toISOString(),
-    };
-
-    const success = saveYouTubePlaylist(regularPlaylist);
-    if (success) {
-      setIsDownloaded(true);
-      onImport?.(playlist);
-    }
+    // Use the parent component's import handler which handles drinking clips
+    onImport?.(playlist);
+    setIsDownloaded(true);
   };
 
   // Handle preview
@@ -605,14 +669,19 @@ const SharedPlaylistCard: React.FC<SharedPlaylistCardProps> = ({
             Clips ({playlist.clips.length})
           </Typography>
           <List dense sx={{ maxHeight: 200, overflow: 'auto' }}>
-            {playlist.clips.map((clip, index) => (
-              <ListItem key={clip.id}>
+            {playlist.clips.map((clip, index) => {
+              // Ensure unique key for shared playlist clips
+              const uniqueKey = clip.id ? `${clip.id}-${index}` : `clip-${index}-${playlist.id}`;
+
+              return (
+              <ListItem key={uniqueKey}>
                 <ListItemText
                   primary={`${index + 1}. ${clip.title}`}
                   secondary={`${clip.artist} • ${clip.duration}s`}
                 />
               </ListItem>
-            ))}
+              );
+            })}
           </List>
 
           {/* User rating */}
@@ -620,15 +689,39 @@ const SharedPlaylistCard: React.FC<SharedPlaylistCardProps> = ({
           <Typography variant="subtitle2" gutterBottom>
             Your Rating
           </Typography>
-          <Rating
-            value={userRating}
-            onChange={(_, newValue) => handleRatingChange(newValue)}
-            sx={{ mb: 2 }}
-          />
+          {canRate ? (
+            <Rating
+              value={userRating}
+              onChange={(_, newValue) => handleRatingChange(newValue)}
+              sx={{ mb: 2 }}
+            />
+          ) : (
+            <Box sx={{ mb: 2 }}>
+              <Rating
+                value={0}
+                readOnly
+                sx={{ opacity: 0.5, mb: 1 }}
+              />
+              <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                {!isAuthenticated
+                  ? 'Sign in to rate this playlist'
+                  : isAnonymous
+                    ? 'Create a full account to rate playlists'
+                    : 'Rating not available'
+                }
+              </Typography>
+            </Box>
+          )}
         </DialogContent>
 
         <DialogActions>
           <Button onClick={() => setDetailsOpen(false)}>Close</Button>
+          <Button
+            onClick={() => setSocialMediaDialogOpen(true)}
+            startIcon={<ShareIcon />}
+          >
+            Share
+          </Button>
           {onPreview && (
             <Button onClick={handlePreview} startIcon={<PlayIcon />}>
               Preview
@@ -717,6 +810,13 @@ const SharedPlaylistCard: React.FC<SharedPlaylistCardProps> = ({
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Social Media Share Dialog */}
+      <SocialMediaShareDialog
+        open={socialMediaDialogOpen}
+        onClose={() => setSocialMediaDialogOpen(false)}
+        playlist={playlist}
+      />
     </>
   );
 };

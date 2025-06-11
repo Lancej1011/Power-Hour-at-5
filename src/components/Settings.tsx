@@ -20,6 +20,8 @@ import {
   Menu,
   MenuItem,
   Chip,
+  TextField,
+  CircularProgress,
 } from '@mui/material';
 import {
   Settings as SettingsIcon,
@@ -34,10 +36,19 @@ import {
   Edit as EditIcon,
   Delete as DeleteIcon,
   ViewColumn as ViewColumnIcon,
+  AccountCircle as AccountCircleIcon,
+  Login as LoginIcon,
+  Logout as LogoutIcon,
+  Person as PersonIcon,
+  Save as SaveIcon,
+  Cancel as CancelIcon,
 } from '@mui/icons-material';
 import { useThemeContext } from '../contexts/ThemeContext';
+import { useAuth, useAuthStatus } from '../contexts/AuthContext';
 import KeyboardShortcutsHelp from './KeyboardShortcutsHelp';
 import CustomThemeEditor from './CustomThemeEditor';
+import { LoginModal, UserProfile } from './auth';
+
 import type { ColorTheme } from '../themes';
 import LibraryPersistenceManager from '../utils/libraryPersistence';
 
@@ -54,12 +65,19 @@ const Settings: React.FC<SettingsProps> = ({
   mode,
   onToggleMode,
 }) => {
+
   const { currentTheme, setTheme, availableThemes, deleteCustomTheme } = useThemeContext();
+  const { user, profile, updateProfile, signOut, isLoading } = useAuth();
+  const { isAuthenticated, isAnonymous, hasFullAccount } = useAuthStatus();
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [themeMenuAnchor, setThemeMenuAnchor] = useState<null | HTMLElement>(null);
   const [customEditorOpen, setCustomEditorOpen] = useState(false);
   const [editingTheme, setEditingTheme] = useState<ColorTheme | null>(null);
   const [librarySettings, setLibrarySettings] = useState<any>({});
+  const [loginModalOpen, setLoginModalOpen] = useState(false);
+  const [isEditingDisplayName, setIsEditingDisplayName] = useState(false);
+  const [displayNameValue, setDisplayNameValue] = useState('');
+  const [isSavingDisplayName, setIsSavingDisplayName] = useState(false);
   const persistenceManager = LibraryPersistenceManager.getInstance();
 
   // Load library settings when dialog opens
@@ -125,6 +143,46 @@ const Settings: React.FC<SettingsProps> = ({
     setEditingTheme(null);
   };
 
+  const handleSignInClick = () => {
+    setLoginModalOpen(true);
+  };
+
+  const handleSignOutClick = async () => {
+    try {
+      await signOut();
+    } catch (error) {
+      console.error('Sign out failed:', error);
+    }
+  };
+
+  const handleLoginSuccess = () => {
+    setLoginModalOpen(false);
+  };
+
+  const handleEditDisplayName = () => {
+    setDisplayNameValue(profile?.displayName || user?.displayName || '');
+    setIsEditingDisplayName(true);
+  };
+
+  const handleSaveDisplayName = async () => {
+    if (!profile) return;
+
+    try {
+      setIsSavingDisplayName(true);
+      await updateProfile({ ...profile, displayName: displayNameValue.trim() });
+      setIsEditingDisplayName(false);
+    } catch (error) {
+      console.error('Failed to update display name:', error);
+    } finally {
+      setIsSavingDisplayName(false);
+    }
+  };
+
+  const handleCancelDisplayName = () => {
+    setDisplayNameValue(profile?.displayName || user?.displayName || '');
+    setIsEditingDisplayName(false);
+  };
+
   const getThemePreviewColor = (theme: ColorTheme) => {
     return theme.primary || '#9c27b0';
   };
@@ -178,6 +236,113 @@ const Settings: React.FC<SettingsProps> = ({
 
         <DialogContent sx={{ px: 0 }}>
           <List>
+            {/* Account Section */}
+            <ListItem>
+              <Typography variant="subtitle1" color="primary" sx={{ fontWeight: 'bold' }}>
+                Account
+              </Typography>
+            </ListItem>
+
+            {isAuthenticated ? (
+              <>
+                <ListItem>
+                  <ListItemIcon>
+                    <AccountCircleIcon />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary={user?.displayName || user?.email || 'Anonymous User'}
+                    secondary={
+                      isAnonymous
+                        ? 'Anonymous Account - Consider linking to an email'
+                        : hasFullAccount
+                          ? 'Full Account with Cloud Sync'
+                          : 'Basic Account'
+                    }
+                  />
+                </ListItem>
+
+                {/* Display Name Editor */}
+                {!isAnonymous && (
+                  <ListItem>
+                    <ListItemIcon>
+                      <PersonIcon />
+                    </ListItemIcon>
+                    {isEditingDisplayName ? (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1 }}>
+                        <TextField
+                          value={displayNameValue}
+                          onChange={(e) => setDisplayNameValue(e.target.value)}
+                          placeholder="Enter display name"
+                          size="small"
+                          sx={{ flex: 1 }}
+                          disabled={isSavingDisplayName}
+                        />
+                        <Tooltip title="Save">
+                          <IconButton
+                            onClick={handleSaveDisplayName}
+                            disabled={isSavingDisplayName}
+                            size="small"
+                            color="primary"
+                          >
+                            {isSavingDisplayName ? <CircularProgress size={20} /> : <SaveIcon />}
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Cancel">
+                          <IconButton
+                            onClick={handleCancelDisplayName}
+                            disabled={isSavingDisplayName}
+                            size="small"
+                          >
+                            <CancelIcon />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    ) : (
+                      <>
+                        <ListItemText
+                          primary="Display Name"
+                          secondary={profile?.displayName || user?.displayName || 'Not set'}
+                        />
+                        <ListItemSecondaryAction>
+                          <Tooltip title="Edit Display Name">
+                            <IconButton
+                              onClick={handleEditDisplayName}
+                              size="small"
+                              color="primary"
+                            >
+                              <EditIcon />
+                            </IconButton>
+                          </Tooltip>
+                        </ListItemSecondaryAction>
+                      </>
+                    )}
+                  </ListItem>
+                )}
+
+                <ListItemButton onClick={handleSignOutClick} disabled={isLoading}>
+                  <ListItemIcon>
+                    <LogoutIcon />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary="Sign Out"
+                    secondary="Sign out of your account"
+                  />
+                </ListItemButton>
+              </>
+            ) : (
+              <ListItemButton onClick={handleSignInClick} disabled={isLoading}>
+                <ListItemIcon>
+                  <LoginIcon />
+                </ListItemIcon>
+                <ListItemText
+                  primary="Sign In"
+                  secondary="Sign in to sync your data across devices"
+                />
+              </ListItemButton>
+            )}
+
+            <Divider sx={{ my: 1 }} />
+
             {/* Appearance Section */}
             <ListItem>
               <Typography variant="subtitle1" color="primary" sx={{ fontWeight: 'bold' }}>
@@ -301,6 +466,9 @@ const Settings: React.FC<SettingsProps> = ({
               />
             </ListItemButton>
           </List>
+
+          {/* Authentication Test Component (Development Only) */}
+
         </DialogContent>
 
         <DialogActions sx={{ px: 3, pb: 2 }}>
@@ -425,6 +593,15 @@ const Settings: React.FC<SettingsProps> = ({
         open={customEditorOpen}
         onClose={handleCustomEditorClose}
         editingTheme={editingTheme}
+      />
+
+      {/* Login Modal */}
+      <LoginModal
+        open={loginModalOpen}
+        onClose={() => setLoginModalOpen(false)}
+        onSuccess={handleLoginSuccess}
+        title="Sign In to Power Hour"
+        subtitle="Sign in to sync your playlists and settings across devices"
       />
     </>
   );

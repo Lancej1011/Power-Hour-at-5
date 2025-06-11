@@ -25,6 +25,10 @@ import {
   Public as PublicIcon,
   Lock as PrivateIcon,
   Add as AddIcon,
+  Facebook as FacebookIcon,
+  Twitter as TwitterIcon,
+  Instagram as InstagramIcon,
+  WhatsApp as WhatsAppIcon,
 } from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
 import { YouTubePlaylist } from '../utils/youtubeUtils';
@@ -37,6 +41,10 @@ import {
 } from '../utils/sharedPlaylistUtils';
 import { authService } from '../services/authService';
 import { firebasePlaylistService } from '../services/firebasePlaylistService';
+import SocialMediaShareDialog from './SocialMediaShareDialog';
+import { useSocialMediaShare } from '../hooks/useSocialMediaShare';
+import { useAuth } from '../contexts/AuthContext';
+import { getUserDisplayName } from '../utils/authUtils';
 
 interface PlaylistSharingDialogProps {
   open: boolean;
@@ -52,11 +60,11 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
   onSuccess,
 }) => {
   const theme = useTheme();
+  const { user, profile } = useAuth();
   const [isPublic, setIsPublic] = useState(false);
   const [description, setDescription] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState('');
-  const [username, setUsername] = useState('');
   const [shareCode, setShareCode] = useState('');
   const [isSharing, setIsSharing] = useState(false);
   const [error, setError] = useState('');
@@ -64,13 +72,16 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
   const [existingSharedPlaylist, setExistingSharedPlaylist] = useState<SharedPlaylist | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
+  const [socialMediaDialogOpen, setSocialMediaDialogOpen] = useState(false);
+  const { shareOnPlatform } = useSocialMediaShare();
+
+  // Get the user's display name for sharing
+  const getCreatorName = () => getUserDisplayName(user, profile);
 
   // Load user profile and check for existing shared version on open
   useEffect(() => {
     if (open && playlist) {
       const loadData = async () => {
-        const userProfile = getUserProfile();
-        setUsername(userProfile.username);
         setError('');
         setSuccess(false);
         setIsEditing(false);
@@ -119,12 +130,6 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
     }
   }, [open, playlist]);
 
-  // Handle username change
-  const handleUsernameChange = (newUsername: string) => {
-    setUsername(newUsername);
-    updateUserProfile({ username: newUsername });
-  };
-
   // Add tag
   const handleAddTag = () => {
     if (newTag.trim() && !tags.includes(newTag.trim()) && tags.length < 10) {
@@ -172,8 +177,9 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
         return;
       }
 
-      if (!username.trim()) {
-        setError('Username is required');
+      const creatorName = getCreatorName();
+      if (!creatorName.trim()) {
+        setError('User profile is required for sharing');
         setIsSharing(false);
         return;
       }
@@ -185,7 +191,7 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
           description: description.trim(),
           tags,
           isPublic,
-          creator: username.trim(),
+          creator: creatorName.trim(),
           clips: playlist.clips, // Update clips in case the original playlist was modified
         };
 
@@ -209,7 +215,7 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
 
         // Update with current settings
         sharedPlaylist.isPublic = isPublic;
-        sharedPlaylist.creator = username.trim();
+        sharedPlaylist.creator = creatorName.trim();
 
         // Save to storage (hybrid approach)
         const saveSuccess = await saveSharedPlaylist(sharedPlaylist);
@@ -267,6 +273,29 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
     }
   };
 
+  // Handle quick social media sharing
+  const handleQuickShare = async (platform: 'facebook' | 'twitter' | 'instagram' | 'whatsapp') => {
+    if (!playlist || !shareCode) return;
+
+    // Create a shared playlist object for sharing
+    const sharedPlaylist: SharedPlaylist = {
+      ...playlist,
+      shareCode,
+      isPublic,
+      description,
+      tags,
+      creator: getCreatorName(),
+      rating: 0,
+      downloadCount: 0,
+      createdAt: playlist.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      version: 1,
+      originalPlaylistId: playlist.id
+    };
+
+    await shareOnPlatform(platform, sharedPlaylist);
+  };
+
   // Handle close
   const handleClose = () => {
     if (!isSharing) {
@@ -277,6 +306,7 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
   if (!playlist) return null;
 
   return (
+    <>
     <Dialog
       open={open}
       onClose={handleClose}
@@ -338,9 +368,80 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
               </Tooltip>
             </Paper>
             
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
               Share this code with others so they can import your playlist!
             </Typography>
+
+            {/* Social Media Sharing Section */}
+            <Divider sx={{ mb: 3 }} />
+
+            <Typography variant="h6" gutterBottom>
+              Share on Social Media
+            </Typography>
+
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Spread the word about your awesome playlist!
+            </Typography>
+
+            {/* Quick social media buttons */}
+            <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, mb: 2 }}>
+              <Tooltip title="Share on Facebook">
+                <IconButton
+                  onClick={() => handleQuickShare('facebook')}
+                  sx={{
+                    color: '#1877F2',
+                    '&:hover': { backgroundColor: 'rgba(24, 119, 242, 0.1)' }
+                  }}
+                >
+                  <FacebookIcon />
+                </IconButton>
+              </Tooltip>
+
+              <Tooltip title="Share on Twitter/X">
+                <IconButton
+                  onClick={() => handleQuickShare('twitter')}
+                  sx={{
+                    color: '#1DA1F2',
+                    '&:hover': { backgroundColor: 'rgba(29, 161, 242, 0.1)' }
+                  }}
+                >
+                  <TwitterIcon />
+                </IconButton>
+              </Tooltip>
+
+              <Tooltip title="Copy for Instagram">
+                <IconButton
+                  onClick={() => handleQuickShare('instagram')}
+                  sx={{
+                    color: '#E4405F',
+                    '&:hover': { backgroundColor: 'rgba(228, 64, 95, 0.1)' }
+                  }}
+                >
+                  <InstagramIcon />
+                </IconButton>
+              </Tooltip>
+
+              <Tooltip title="Share on WhatsApp">
+                <IconButton
+                  onClick={() => handleQuickShare('whatsapp')}
+                  sx={{
+                    color: '#25D366',
+                    '&:hover': { backgroundColor: 'rgba(37, 211, 102, 0.1)' }
+                  }}
+                >
+                  <WhatsAppIcon />
+                </IconButton>
+              </Tooltip>
+            </Box>
+
+            <Button
+              variant="outlined"
+              onClick={() => setSocialMediaDialogOpen(true)}
+              startIcon={<ShareIcon />}
+              sx={{ mb: 2 }}
+            >
+              More Sharing Options
+            </Button>
           </Box>
         ) : (
           // Configuration state
@@ -368,15 +469,18 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
 
             <Divider sx={{ mb: 3 }} />
 
-            {/* Username */}
-            <TextField
-              fullWidth
-              label="Your Username"
-              value={username}
-              onChange={(e) => handleUsernameChange(e.target.value)}
-              sx={{ mb: 3 }}
-              helperText="This will be shown as the creator of the playlist"
-            />
+            {/* Creator Info Display */}
+            <Box sx={{ mb: 3 }}>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                Sharing as:
+              </Typography>
+              <Typography variant="body1" fontWeight={500}>
+                {getCreatorName()}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                You can change your display name in Settings
+              </Typography>
+            </Box>
 
             {/* Privacy setting */}
             <Box sx={{ mb: 3 }}>
@@ -502,6 +606,29 @@ const PlaylistSharingDialog: React.FC<PlaylistSharingDialogProps> = ({
         )}
       </DialogActions>
     </Dialog>
+
+    {/* Social Media Share Dialog */}
+    {success && (
+      <SocialMediaShareDialog
+        open={socialMediaDialogOpen}
+        onClose={() => setSocialMediaDialogOpen(false)}
+        playlist={shareCode && playlist ? {
+          ...playlist,
+          shareCode,
+          isPublic,
+          description,
+          tags,
+          creator: getCreatorName(),
+          rating: 0,
+          downloadCount: 0,
+          createdAt: playlist.createdAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          version: 1,
+          originalPlaylistId: playlist.id
+        } : null}
+      />
+    )}
+    </>
   );
 };
 

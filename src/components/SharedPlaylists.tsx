@@ -33,6 +33,8 @@ import {
   Recommend as FeaturedIcon,
   Add as AddIcon,
   Person as PersonIcon,
+  Refresh as RefreshIcon,
+  AdminPanelSettings as AdminPanelSettingsIcon,
 } from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
 import {
@@ -43,15 +45,27 @@ import {
   filterSharedPlaylists,
   getAllTags,
   getAllCreators,
+  clearSharedPlaylistsLocal,
+  getSharedPlaylistsLocal,
+  saveSharedPlaylistLocal,
 } from '../utils/sharedPlaylistUtils';
 import { authService } from '../services/authService';
 import { firebasePlaylistService } from '../services/firebasePlaylistService';
 import { recordPlaylistDownload } from '../utils/playlistRating';
 import { importPlaylistByCode } from '../utils/playlistImport';
+import { useAuth, useAuthStatus } from '../contexts/AuthContext';
+import { LoginModal } from './auth';
 import SharedPlaylistCard from './SharedPlaylistCard';
+import AdminPanel from './AdminPanel';
+import { canManageCommunity } from '../utils/authUtils';
+import DrinkingClipImportDialog from './DrinkingClipImportDialog';
+import { DrinkingClipData } from '../utils/playlistImport';
 
 const SharedPlaylists: React.FC = () => {
   const theme = useTheme();
+  const { user, canAccessFeature } = useAuth();
+  const { isAuthenticated, isAnonymous, hasFullAccount, canAccessCommunityFeatures } = useAuthStatus();
+
   const [playlists, setPlaylists] = useState<SharedPlaylist[]>([]);
   const [userPlaylists, setUserPlaylists] = useState<SharedPlaylist[]>([]);
   const [filteredPlaylists, setFilteredPlaylists] = useState<SharedPlaylist[]>([]);
@@ -67,8 +81,14 @@ const SharedPlaylists: React.FC = () => {
   const [importCode, setImportCode] = useState('');
   const [importLoading, setImportLoading] = useState(false);
   const [importError, setImportError] = useState('');
-  const [isAuthenticated, setIsAuthenticated] = useState(authService.isAuthenticated());
-  const [showMyPlaylists, setShowMyPlaylists] = useState(false);
+  const [loginModalOpen, setLoginModalOpen] = useState(false);
+  const [authPromptMessage, setAuthPromptMessage] = useState('');
+  const [adminPanelOpen, setAdminPanelOpen] = useState(false);
+
+  // Drinking clip import dialog state
+  const [drinkingClipDialogOpen, setDrinkingClipDialogOpen] = useState(false);
+  const [pendingDrinkingClip, setPendingDrinkingClip] = useState<DrinkingClipData | null>(null);
+  const [pendingPlaylistName, setPendingPlaylistName] = useState<string>('');
 
   // Get available filter options
   const availableTags = useMemo(() => getAllTags(), [playlists]);
@@ -81,7 +101,7 @@ const SharedPlaylists: React.FC = () => {
 
   // Debug function - expose to window for testing
   useEffect(() => {
-    (window as any).debugCommunity = {
+    const debugFunctions = {
       createTestPlaylist: async () => {
         if (!authService.isAuthenticated()) {
           await authService.autoSignIn();
@@ -172,26 +192,43 @@ const SharedPlaylists: React.FC = () => {
         }
 
         loadPlaylists(); // Reload after fixing
+      },
+      clearLocalStorage: () => {
+        // Clear localStorage playlists
+        const success = clearSharedPlaylistsLocal();
+        if (success) {
+          console.log('✅ Cleared localStorage playlists');
+          loadPlaylists(); // Refresh the display
+        } else {
+          console.error('❌ Failed to clear localStorage playlists');
+        }
       }
     };
+
+    // Expose debug functions to window for console access
+    (window as any).communityDebug = debugFunctions;
   }, [playlists, userPlaylists]);
 
 
 
-  // Set up auth state listener
+  // Reload playlists when authentication state changes or category changes
   useEffect(() => {
-    const handleAuthChange = (user: any) => {
-      setIsAuthenticated(!!user);
-      // Reload playlists when auth state changes
-      if (user) {
-        loadPlaylists();
-      }
+    if (isAuthenticated) {
+      loadPlaylists();
+    }
+  }, [isAuthenticated, selectedCategory]);
+
+  // Listen for playlist sharing events to refresh the community
+  useEffect(() => {
+    const handlePlaylistShared = () => {
+      console.log('📢 Playlist shared event received, refreshing community playlists...');
+      loadPlaylists();
     };
 
-    authService.addAuthStateListener(handleAuthChange);
+    window.addEventListener('playlistShared', handlePlaylistShared);
 
     return () => {
-      authService.removeAuthStateListener(handleAuthChange);
+      window.removeEventListener('playlistShared', handlePlaylistShared);
     };
   }, []);
 
@@ -203,11 +240,6 @@ const SharedPlaylists: React.FC = () => {
   const loadPlaylists = async () => {
     setLoading(true);
     try {
-      // Auto sign-in if Firebase is available and user is not authenticated
-      if (!authService.isAuthenticated()) {
-        await authService.autoSignIn();
-      }
-
       // Load shared playlists using hybrid approach
       let loadedPlaylists = await getSharedPlaylists(selectedCategory);
 
@@ -220,7 +252,7 @@ const SharedPlaylists: React.FC = () => {
       setPlaylists(loadedPlaylists);
 
       // Load user's own playlists if authenticated
-      if (authService.isAuthenticated()) {
+      if (isAuthenticated) {
         const userOwnedPlaylists = await firebasePlaylistService.getUserPlaylists();
         setUserPlaylists(userOwnedPlaylists);
       } else {
@@ -295,10 +327,20 @@ const SharedPlaylists: React.FC = () => {
       if (result.success) {
         console.log(`✅ Successfully imported playlist: ${playlist.name}`);
         console.log(`✅ Playlist saved as regular YouTube playlist`);
-        // You might want to show a success snackbar here
+
+        // Check if there's a new drinking clip to import
+        if (result.hasNewDrinkingClip && result.drinkingClip) {
+          setPendingDrinkingClip(result.drinkingClip);
+          setPendingPlaylistName(playlist.name);
+          setDrinkingClipDialogOpen(true);
+        }
+
+        // Record download if user is authenticated
+        if (isAuthenticated) {
+          recordPlaylistDownload(playlist.id);
+        }
       } else {
         console.error(`❌ Failed to import playlist: ${result.message}`);
-        // You might want to show an error snackbar here
       }
     } catch (error) {
       console.error('❌ Error importing playlist:', error);
@@ -367,7 +409,13 @@ const SharedPlaylists: React.FC = () => {
         setImportCode('');
         console.log('✅ Successfully imported playlist:', result.message);
         console.log('✅ Playlist saved as regular YouTube playlist and should appear on Playlists page');
-        // You might want to show a success snackbar here
+
+        // Check if there's a new drinking clip to import
+        if (result.hasNewDrinkingClip && result.drinkingClip && result.playlist) {
+          setPendingDrinkingClip(result.drinkingClip);
+          setPendingPlaylistName(result.playlist.name);
+          setDrinkingClipDialogOpen(true);
+        }
       } else {
         setImportError(result.message);
       }
@@ -377,6 +425,12 @@ const SharedPlaylists: React.FC = () => {
     } finally {
       setImportLoading(false);
     }
+  };
+
+  // Authentication prompt handler
+  const handleAuthenticationRequired = (message: string) => {
+    setAuthPromptMessage(message);
+    setLoginModalOpen(true);
   };
 
   // Category tabs configuration
@@ -411,11 +465,53 @@ const SharedPlaylists: React.FC = () => {
 
         {/* Authentication and playlist status */}
         <Box sx={{ mt: 2, p: 2, bgcolor: 'background.paper', borderRadius: 1, border: 1, borderColor: 'divider' }}>
-          <Typography variant="body2" color="text.secondary">
-            Status: {isAuthenticated ? '✅ Authenticated' : '❌ Not authenticated'} |
-            Community Playlists: {playlists.length} |
-            Your Playlists: {userPlaylists.length}
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+              <Typography variant="body2" color="text.secondary">
+                Status: {isAuthenticated
+                  ? (isAnonymous ? '🔒 Anonymous Account' : '✅ Full Account')
+                  : '❌ Not Signed In'
+                } |
+                Community Playlists: {playlists.length} |
+                Your Playlists: {userPlaylists.length}
+              </Typography>
+            </Box>
+
+            {!isAuthenticated && (
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => handleAuthenticationRequired('Sign in to access all community features, including sharing your own playlists and managing your collection.')}
+                startIcon={<PersonIcon />}
+              >
+                Sign In
+              </Button>
+            )}
+
+            {isAuthenticated && isAnonymous && (
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => handleAuthenticationRequired('Upgrade to a full account to share playlists and access advanced community features.')}
+                startIcon={<PersonIcon />}
+              >
+                Upgrade Account
+              </Button>
+            )}
+
+            {/* Admin Panel Button */}
+            {canManageCommunity(user) && (
+              <Button
+                variant="contained"
+                size="small"
+                onClick={() => setAdminPanelOpen(true)}
+                startIcon={<AdminPanelSettingsIcon />}
+                color="warning"
+              >
+                Admin Panel
+              </Button>
+            )}
+          </Box>
         </Box>
       </Box>
 
@@ -517,8 +613,19 @@ const SharedPlaylists: React.FC = () => {
             </FormControl>
           </Grid>
 
-          {/* Clear filters */}
-          <Grid size={{ xs: 12, md: 1 }}>
+          {/* Refresh and Clear filters */}
+          <Grid size={{ xs: 6, md: 1 }}>
+            <Button
+              variant="outlined"
+              onClick={loadPlaylists}
+              startIcon={<RefreshIcon />}
+              fullWidth
+              disabled={loading}
+            >
+              Refresh
+            </Button>
+          </Grid>
+          <Grid size={{ xs: 6, md: 1 }}>
             <Button
               variant="outlined"
               onClick={clearFilters}
@@ -639,6 +746,43 @@ const SharedPlaylists: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Login Modal */}
+      <LoginModal
+        open={loginModalOpen}
+        onClose={() => setLoginModalOpen(false)}
+        onSuccess={() => {
+          setLoginModalOpen(false);
+          // Reload playlists after successful authentication
+          loadPlaylists();
+        }}
+        title="Join the Community"
+        subtitle={authPromptMessage || 'Sign in to access all community features'}
+      />
+
+      {/* Admin Panel */}
+      <AdminPanel
+        open={adminPanelOpen}
+        onClose={() => {
+          setAdminPanelOpen(false);
+          // Reload playlists after admin actions
+          loadPlaylists();
+        }}
+      />
+
+      {/* Drinking Clip Import Dialog */}
+      {pendingDrinkingClip && (
+        <DrinkingClipImportDialog
+          open={drinkingClipDialogOpen}
+          onClose={() => {
+            setDrinkingClipDialogOpen(false);
+            setPendingDrinkingClip(null);
+            setPendingPlaylistName('');
+          }}
+          drinkingClip={pendingDrinkingClip}
+          playlistName={pendingPlaylistName}
+        />
+      )}
     </Container>
   );
 };

@@ -39,12 +39,14 @@ import {
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { useThemeContext } from '../contexts/ThemeContext';
 import { getYouTubePlaylists, YouTubePlaylist, YouTubeClip, formatTime } from '../utils/youtubeUtils';
+import { useCollaborationStore } from '../stores/collaborationStore';
 
 const YouTubePlaylistPlayer: React.FC = () => {
   const { playlistId } = useParams<{ playlistId: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { currentTheme } = useThemeContext();
+  const collaborationStore = useCollaborationStore();
   const [playlist, setPlaylist] = useState<YouTubePlaylist | null>(null);
   const [currentClipIndex, setCurrentClipIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -73,72 +75,116 @@ const YouTubePlaylistPlayer: React.FC = () => {
 
   // Load playlist data
   useEffect(() => {
-    if (playlistId) {
-      try {
-        let playlists = getYouTubePlaylists();
-        console.log('Available YouTube playlists:', playlists);
-        console.log('Looking for playlist ID:', playlistId);
+    const loadPlaylistData = async () => {
+      if (playlistId) {
+        try {
+          // Load regular YouTube playlists from localStorage
+          let playlists = getYouTubePlaylists();
+          console.log('Available YouTube playlists:', playlists);
+          console.log('Looking for playlist ID:', playlistId);
 
-        // If no playlists exist, create a test playlist for demo purposes
-        if (playlists.length === 0) {
-          console.log('No YouTube playlists found, creating test playlist...');
-          const testPlaylist = {
-            id: 'test_youtube_playlist_1',
-            name: 'Test YouTube Playlist',
-            date: new Date().toISOString(),
-            clips: [
-              {
-                id: 'clip_1',
-                videoId: 'dQw4w9WgXcQ',
-                title: 'Rick Astley - Never Gonna Give You Up',
-                artist: 'Rick Astley',
-                startTime: 0,
-                duration: 60,
-                thumbnail: 'https://img.youtube.com/vi/dQw4w9WgXcQ/medium.jpg'
-              },
-              {
-                id: 'clip_2',
-                videoId: 'L_jWHffIx5E',
-                title: 'Smash Mouth - All Star',
-                artist: 'Smash Mouth',
-                startTime: 30,
-                duration: 60,
-                thumbnail: 'https://img.youtube.com/vi/L_jWHffIx5E/medium.jpg'
-              }
-            ]
-          };
+          // Also check collaborative playlists
+          let collaborativePlaylists = [];
+          try {
+            const activeCollaborations = collaborationStore.activeCollaborations;
+            console.log('Active collaborations:', activeCollaborations);
 
-          // Save test playlist to localStorage
-          localStorage.setItem('youtube_playlists', JSON.stringify([testPlaylist]));
-          playlists = [testPlaylist];
-        }
+            // Convert collaborative playlists to the expected format
+            collaborativePlaylists = Object.values(activeCollaborations)
+              .filter((playlist): playlist is any => {
+                return playlist && typeof playlist === 'object' && playlist.id && playlist.name;
+              })
+              .map((playlist: any) => ({
+                id: playlist.id,
+                name: playlist.name,
+                date: playlist.createdAt ?
+                  (playlist.createdAt instanceof Date ?
+                    playlist.createdAt.toISOString() :
+                    (typeof playlist.createdAt === 'object' && 'toDate' in playlist.createdAt ?
+                      playlist.createdAt.toDate().toISOString() :
+                      playlist.createdAt.toString()
+                    )
+                  ) : new Date().toISOString(),
+                clips: Array.isArray(playlist.clips) ? playlist.clips : [],
+                drinkingSoundPath: playlist.drinkingSoundPath,
+                imagePath: playlist.imagePath,
+                isCollaborative: true
+              }));
 
-        const foundPlaylist = playlists.find(p => p.id === playlistId);
-        if (foundPlaylist) {
-          console.log('Found playlist:', foundPlaylist);
-          setPlaylist(foundPlaylist);
-
-          // Check if there's a clip parameter in the URL to start at a specific clip
-          const clipParam = searchParams.get('clip');
-          if (clipParam) {
-            const clipIndex = parseInt(clipParam, 10);
-            if (!isNaN(clipIndex) && clipIndex >= 0 && clipIndex < foundPlaylist.clips.length) {
-              console.log(`Starting at clip index ${clipIndex} from URL parameter`);
-              setCurrentClipIndex(clipIndex);
-            } else {
-              console.warn(`Invalid clip index ${clipParam} in URL parameter, using default (0)`);
-            }
+            console.log('Collaborative playlists:', collaborativePlaylists);
+          } catch (collaborationError) {
+            console.warn('⚠️ Error loading collaborative playlists:', collaborationError);
+            collaborativePlaylists = [];
           }
-        } else {
-          console.log('Playlist not found, redirecting to playlists page');
-          // Playlist not found, redirect back
+
+          // Combine both types of playlists
+          const allPlaylists = [...playlists, ...collaborativePlaylists];
+          console.log('All available playlists:', allPlaylists);
+
+          // If no playlists exist, create a test playlist for demo purposes
+          if (allPlaylists.length === 0) {
+            console.log('No playlists found, creating test playlist...');
+            const testPlaylist = {
+              id: 'test_youtube_playlist_1',
+              name: 'Test YouTube Playlist',
+              date: new Date().toISOString(),
+              clips: [
+                {
+                  id: 'clip_1',
+                  videoId: 'dQw4w9WgXcQ',
+                  title: 'Rick Astley - Never Gonna Give You Up',
+                  artist: 'Rick Astley',
+                  startTime: 0,
+                  duration: 60,
+                  thumbnail: 'https://img.youtube.com/vi/dQw4w9WgXcQ/medium.jpg'
+                },
+                {
+                  id: 'clip_2',
+                  videoId: 'L_jWHffIx5E',
+                  title: 'Smash Mouth - All Star',
+                  artist: 'Smash Mouth',
+                  startTime: 30,
+                  duration: 60,
+                  thumbnail: 'https://img.youtube.com/vi/L_jWHffIx5E/medium.jpg'
+                }
+              ]
+            };
+
+            // Save test playlist to localStorage
+            localStorage.setItem('youtube_playlists', JSON.stringify([testPlaylist]));
+            allPlaylists.push(testPlaylist);
+          }
+
+          const foundPlaylist = allPlaylists.find(p => p.id === playlistId);
+          if (foundPlaylist) {
+            console.log('Found playlist:', foundPlaylist);
+            setPlaylist(foundPlaylist);
+
+            // Check if there's a clip parameter in the URL to start at a specific clip
+            const clipParam = searchParams.get('clip');
+            if (clipParam) {
+              const clipIndex = parseInt(clipParam, 10);
+              if (!isNaN(clipIndex) && clipIndex >= 0 && clipIndex < foundPlaylist.clips.length) {
+                console.log(`Starting at clip index ${clipIndex} from URL parameter`);
+                setCurrentClipIndex(clipIndex);
+              } else {
+                console.warn(`Invalid clip index ${clipParam} in URL parameter, using default (0)`);
+              }
+            }
+          } else {
+            console.log('Playlist not found in localStorage or collaborative playlists, redirecting to playlists page');
+            console.log('Searched in:', allPlaylists.map(p => ({ id: p.id, name: p.name })));
+            // Playlist not found, redirect back
+            navigate('/playlists');
+          }
+        } catch (error) {
+          console.error('Error loading YouTube playlist:', error);
           navigate('/playlists');
         }
-      } catch (error) {
-        console.error('Error loading YouTube playlist:', error);
-        navigate('/playlists');
       }
-    }
+    };
+
+    loadPlaylistData();
   }, [playlistId, navigate, searchParams]);
 
   // YouTube player event handlers
@@ -1414,8 +1460,13 @@ const YouTubePlaylistPlayer: React.FC = () => {
                     ref={provided.innerRef}
                     {...provided.droppableProps}
                   >
-                    {playlist.clips.map((clip, index) => (
-                      <Draggable key={clip.id} draggableId={clip.id} index={index}>
+                    {playlist.clips.map((clip, index) => {
+                      // Ensure unique key by combining clip.id with index as fallback
+                      const uniqueKey = clip.id || `clip-${index}-${Date.now()}`;
+                      const uniqueDraggableId = clip.id || `draggable-${index}-${Date.now()}`;
+
+                      return (
+                      <Draggable key={uniqueKey} draggableId={uniqueDraggableId} index={index}>
                         {(provided, snapshot) => (
                           <ListItem
                             ref={provided.innerRef}
@@ -1489,7 +1540,8 @@ const YouTubePlaylistPlayer: React.FC = () => {
                           </ListItem>
                         )}
                       </Draggable>
-                    ))}
+                      );
+                    })}
                     {provided.placeholder}
                   </List>
                 )}

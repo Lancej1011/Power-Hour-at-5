@@ -457,8 +457,11 @@ export const searchYouTubeVideosLegacy = async (query: string, apiKey?: string):
 
 // Create a clip from a YouTube video
 export const createClipFromVideo = (video: YouTubeVideo, startTime: number = 0, duration: number = 60): YouTubeClip => {
+  // Generate a truly unique ID by including timestamp and random component
+  const uniqueId = `${video.id}_${startTime}_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
   return {
-    id: `${video.id}_${startTime}`,
+    id: uniqueId,
     videoId: video.id,
     title: video.title,
     artist: video.channelTitle,
@@ -670,6 +673,53 @@ export const createBulkClipsFromVideos = (
 export const generateRandomStartTime = (videoDuration: number, clipDuration: number): number => {
   const maxStart = Math.max(0, videoDuration - clipDuration);
   return Math.floor(Math.random() * (maxStart + 1));
+};
+
+// Fix duplicate clip IDs in a playlist
+export const fixDuplicateClipIds = (playlist: YouTubePlaylist): YouTubePlaylist => {
+  const seenIds = new Set<string>();
+  const fixedClips = playlist.clips.map((clip, index) => {
+    if (seenIds.has(clip.id)) {
+      // Generate a new unique ID for duplicate clips
+      const newId = `${clip.videoId}_${clip.startTime}_${Date.now()}_${Math.random().toString(36).substr(2, 6)}_${index}`;
+      console.log(`🔧 Fixed duplicate clip ID: ${clip.id} -> ${newId}`);
+      seenIds.add(newId);
+      return { ...clip, id: newId };
+    } else {
+      seenIds.add(clip.id);
+      return clip;
+    }
+  });
+
+  return { ...playlist, clips: fixedClips };
+};
+
+// Clean up all playlists with duplicate IDs
+export const cleanupAllPlaylistDuplicateIds = (): void => {
+  try {
+    const playlists = getYouTubePlaylists();
+    let hasChanges = false;
+
+    const cleanedPlaylists = playlists.map(playlist => {
+      const clipIds = playlist.clips.map(c => c.id);
+      const duplicateIds = clipIds.filter((id, index) => clipIds.indexOf(id) !== index);
+
+      if (duplicateIds.length > 0) {
+        console.log(`🧹 Cleaning up duplicate IDs in playlist: ${playlist.name}`);
+        hasChanges = true;
+        return fixDuplicateClipIds(playlist);
+      }
+
+      return playlist;
+    });
+
+    if (hasChanges) {
+      localStorage.setItem('youtube_playlists', JSON.stringify(cleanedPlaylists));
+      console.log('✅ Cleaned up duplicate clip IDs in playlists');
+    }
+  } catch (error) {
+    console.error('❌ Error cleaning up duplicate clip IDs:', error);
+  }
 };
 
 // Format view count for display (e.g., 1.2M views)
@@ -1165,5 +1215,96 @@ export const validateApiKey = async (apiKey: string): Promise<boolean> => {
   } catch (error) {
     console.error('🚨 Network error during API key validation:', error);
     return false;
+  }
+};
+
+// Get videos from a YouTube playlist using yt-dlp
+export const getPlaylistVideosWithYtDlp = async (
+  playlistId: string,
+  maxResults: number = 50
+): Promise<YouTubeSearchResult> => {
+  try {
+    console.log('🎵 Getting playlist videos with yt-dlp for playlist:', playlistId);
+
+    // Check if we're in Electron environment
+    if (!window.electronAPI?.ytDlpGetPlaylistVideos) {
+      throw new Error('yt-dlp playlist extraction not available: Electron API not found');
+    }
+
+    // Use Electron IPC to get playlist videos via main process
+    const result = await window.electronAPI.ytDlpGetPlaylistVideos(playlistId, maxResults);
+
+    if (!result.success) {
+      throw new Error(result.error || 'yt-dlp playlist extraction failed');
+    }
+
+    console.log('📊 yt-dlp returned playlist data:', result.data);
+
+    // Convert yt-dlp results to our format
+    const results = Array.isArray(result.data) ? result.data : [result.data];
+
+    const videos: YouTubeVideo[] = results
+      .filter(info => info && info.id) // Filter out invalid entries
+      .map((info: any, index: number) => {
+        const videoId = info.id || `playlist_video_${Date.now()}_${index}`;
+
+        return {
+          id: videoId,
+          title: info.title || info.fulltitle || 'Unknown Title',
+          channelTitle: info.uploader || info.channel || info.uploader_id || 'Unknown Channel',
+          duration: formatDurationFromSeconds(info.duration || 0),
+          thumbnail: info.thumbnail || info.thumbnails?.[0]?.url || `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`,
+          description: info.description || '',
+          publishedAt: info.upload_date ?
+            new Date(info.upload_date.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')).toISOString() :
+            new Date().toISOString(),
+          viewCount: formatViewCount(info.view_count || 0),
+          likeCount: formatViewCount(info.like_count || 0)
+        };
+      });
+
+    console.log('✅ Successfully processed', videos.length, 'videos from playlist');
+
+    return {
+      videos,
+      totalResults: result.totalVideos || videos.length,
+      resultsPerPage: maxResults,
+      nextPageToken: null, // Playlists are typically loaded all at once
+      source: 'yt-dlp-playlist'
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to get playlist videos:', error);
+    throw error;
+  }
+};
+
+// Enhanced playlist extraction that tries multiple methods
+export const getPlaylistVideos = async (
+  playlistId: string,
+  credentials?: string | any,
+  options: { maxResults?: number } = {}
+): Promise<YouTubeSearchResult> => {
+  const { maxResults = 50 } = options;
+
+  try {
+    console.log('🚀 Attempting yt-dlp playlist extraction...');
+    return await getPlaylistVideosWithYtDlp(playlistId, maxResults);
+  } catch (error) {
+    console.error('❌ yt-dlp playlist extraction failed:', error);
+
+    // Provide helpful error messages to the user
+    let userFriendlyError = 'Playlist extraction failed';
+    const errorMessage = error.message || '';
+
+    if (errorMessage.includes('Electron API not found')) {
+      userFriendlyError = 'This feature requires the desktop app. Please use the Electron version of PHat5.';
+    } else if (errorMessage.includes('yt-dlp not available')) {
+      userFriendlyError = 'yt-dlp is not installed or not available. Please install yt-dlp to use this feature.';
+    } else if (errorMessage.includes('playlist extraction failed')) {
+      userFriendlyError = 'Failed to extract playlist videos. The playlist may be private or unavailable.';
+    }
+
+    throw new Error(userFriendlyError);
   }
 };

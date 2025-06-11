@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   AppBar,
   Toolbar,
@@ -9,9 +9,14 @@ import {
   Chip,
   useTheme,
   alpha,
+  Dialog,
+  DialogContent,
 } from '@mui/material';
 import { useThemeContext } from '../contexts/ThemeContext';
 import ThemeSelector from './ThemeSelector';
+import AuthStatusIndicator from './auth/AuthStatusIndicator';
+import UserProfile from './auth/UserProfile';
+import SyncStatusIndicator from './auth/SyncStatusIndicator';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
 import LocalBarIcon from '@mui/icons-material/LocalBar';
@@ -21,6 +26,7 @@ interface ModernAppHeaderProps {
   title?: string;
   subtitle?: string;
   showThemeControls?: boolean;
+  showAuthControls?: boolean;
   actions?: React.ReactNode;
 }
 
@@ -28,22 +34,33 @@ const ModernAppHeader: React.FC<ModernAppHeaderProps> = ({
   title = "Power Hour",
   subtitle = "Professional Music Mixing",
   showThemeControls = true,
+  showAuthControls = true,
   actions,
 }) => {
   const theme = useTheme();
   const { mode, toggleMode, currentTheme } = useThemeContext();
+  const [profileDialogOpen, setProfileDialogOpen] = useState(false);
+
+  const handleProfileClick = () => {
+    setProfileDialogOpen(true);
+  };
+
+  const handleProfileClose = () => {
+    setProfileDialogOpen(false);
+  };
 
   return (
-    <AppBar 
-      position="static" 
-      elevation={0}
-      sx={{
-        background: `linear-gradient(135deg, ${currentTheme.primary} 0%, ${currentTheme.secondary} 100%)`,
-        borderBottom: `1px solid ${alpha(theme.palette.common.white, 0.1)}`,
-        backdropFilter: 'blur(20px)',
-        WebkitBackdropFilter: 'blur(20px)',
-      }}
-    >
+    <>
+      <AppBar
+        position="static"
+        elevation={0}
+        sx={{
+          background: `linear-gradient(135deg, ${currentTheme.primary} 0%, ${currentTheme.secondary} 100%)`,
+          borderBottom: `1px solid ${alpha(theme.palette.common.white, 0.1)}`,
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
+        }}
+      >
       <Toolbar sx={{ 
         minHeight: '80px !important',
         padding: '0 24px',
@@ -134,11 +151,43 @@ const ModernAppHeader: React.FC<ModernAppHeaderProps> = ({
           />
         </Box>
 
+        {/* Authentication Controls */}
+        {showAuthControls && (
+          <Box sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            ml: 2,
+            '& .MuiIconButton-root': {
+              color: theme.palette.common.white,
+              backgroundColor: alpha(theme.palette.common.white, 0.1),
+              border: `1px solid ${alpha(theme.palette.common.white, 0.2)}`,
+              backdropFilter: 'blur(10px)',
+              WebkitBackdropFilter: 'blur(10px)',
+              '&:hover': {
+                backgroundColor: alpha(theme.palette.common.white, 0.2),
+                transform: 'scale(1.05)',
+              },
+              transition: 'all 0.2s ease-in-out',
+            },
+          }}>
+            {/* Sync Status Indicator */}
+            <SyncStatusIndicator compact />
+
+            {/* User Authentication Status */}
+            <AuthStatusIndicator
+              variant="avatar"
+              showStatus={true}
+              onProfileClick={handleProfileClick}
+            />
+          </Box>
+        )}
+
         {/* Theme Controls */}
         {showThemeControls && (
-          <Box sx={{ 
-            display: 'flex', 
-            alignItems: 'center', 
+          <Box sx={{
+            display: 'flex',
+            alignItems: 'center',
             gap: 1,
             ml: 2,
           }}>
@@ -185,9 +234,9 @@ const ModernAppHeader: React.FC<ModernAppHeaderProps> = ({
 
         {/* Custom Actions */}
         {actions && (
-          <Box sx={{ 
-            display: 'flex', 
-            alignItems: 'center', 
+          <Box sx={{
+            display: 'flex',
+            alignItems: 'center',
             gap: 1,
             ml: 2,
           }}>
@@ -196,6 +245,31 @@ const ModernAppHeader: React.FC<ModernAppHeaderProps> = ({
         )}
       </Toolbar>
     </AppBar>
+
+    {/* User Profile Dialog */}
+    <Dialog
+      open={profileDialogOpen}
+      onClose={handleProfileClose}
+      maxWidth="md"
+      fullWidth
+      PaperProps={{
+        sx: {
+          borderRadius: 3,
+          background: `linear-gradient(135deg, ${alpha(currentTheme.primary, 0.05)} 0%, ${alpha(currentTheme.secondary, 0.05)} 100%)`,
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
+          border: `1px solid ${alpha(theme.palette.divider, 0.1)}`,
+        },
+      }}
+    >
+      <DialogContent sx={{ p: 0 }}>
+        <UserProfile
+          showSettings={true}
+          onSignOut={handleProfileClose}
+        />
+      </DialogContent>
+    </Dialog>
+    </>
   );
 };
 

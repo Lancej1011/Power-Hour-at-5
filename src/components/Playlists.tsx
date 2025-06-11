@@ -65,6 +65,9 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import ShareIcon from '@mui/icons-material/Share';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CodeIcon from '@mui/icons-material/Code';
+import GroupIcon from '@mui/icons-material/Group';
+import PersonAddIcon from '@mui/icons-material/PersonAdd';
+import VpnKeyIcon from '@mui/icons-material/VpnKey';
 
 import { useTheme } from '@mui/material/styles';
 import { useAudio } from '../contexts/AudioContext';
@@ -72,6 +75,16 @@ import { usePlaylistImages } from '../hooks/usePlaylistImage';
 import DrinkingSoundManager from './DrinkingSoundManager';
 import YouTubeDrinkingSoundManager from './YouTubeDrinkingSoundManager';
 import PlaylistSharingDialog from './PlaylistSharingDialog';
+import PlaylistEditDialog from './PlaylistEditDialog';
+import {
+  CollaborativePlaylistDialog,
+  CollaborationInviteDialog,
+  CollaboratorsList,
+  UserPresenceIndicator,
+  CollaborationNotifications,
+  PlaylistConversionDialog,
+  JoinCollaborativePlaylistDialog
+} from './playlist';
 import {
   getYouTubePlaylists,
   YouTubePlaylist,
@@ -82,7 +95,11 @@ import {
   setCustomImageForPlaylist,
   clearPlaylistThumbnail
 } from '../utils/youtubeUtils';
-import { getShareCodeForPlaylist } from '../utils/sharedPlaylistUtils';
+import { getShareCodeForPlaylist, SharedPlaylist } from '../utils/sharedPlaylistUtils';
+import { authService } from '../services/authService';
+import { firebasePlaylistService } from '../services/firebasePlaylistService';
+import { useCollaborationStore, useCollaborativePlaylist } from '../stores/collaborationStore';
+import { CollaborativePlaylist } from '../types/collaboration';
 
 import UIPreferencesManager from '../utils/uiPreferences';
 
@@ -109,7 +126,7 @@ interface Playlist {
   imagePath?: string;
 }
 
-// Unified playlist interface that can handle both regular and YouTube playlists
+// Unified playlist interface that can handle both regular, YouTube, and collaborative playlists
 interface UnifiedPlaylist {
   id: string;
   name: string;
@@ -118,6 +135,9 @@ interface UnifiedPlaylist {
   drinkingSoundPath?: string;
   imagePath?: string;
   type: 'regular' | 'youtube';
+  // Collaborative properties
+  isCollaborative?: boolean;
+  collaborationId?: string;
 }
 
 interface PlaylistsProps {
@@ -187,8 +207,28 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
   const [sharingDialogOpen, setSharingDialogOpen] = useState(false);
   const [playlistToShare, setPlaylistToShare] = useState<UnifiedPlaylist | null>(null);
 
+  // Playlist edit state
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [playlistToEdit, setPlaylistToEdit] = useState<SharedPlaylist | null>(null);
+
   // Share code display state
   const [shareCodeCache, setShareCodeCache] = useState<Record<string, string | null>>({});
+
+  // Collaborative playlist state
+  const [collaborativeDialogOpen, setCollaborativeDialogOpen] = useState(false);
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
+  const [selectedCollaborativePlaylist, setSelectedCollaborativePlaylist] = useState<CollaborativePlaylist | null>(null);
+
+  // Conversion dialog state
+  const [conversionDialogOpen, setConversionDialogOpen] = useState(false);
+  const [playlistToConvert, setPlaylistToConvert] = useState<UnifiedPlaylist | null>(null);
+
+  // Join dialog state
+  const [joinDialogOpen, setJoinDialogOpen] = useState(false);
+
+  // Collaboration store
+  const collaborationStore = useCollaborationStore();
+  const { activeCollaborations, connectionStatus } = collaborationStore;
 
   // --- Start of useCallback wrapped functions ---
 
@@ -196,6 +236,57 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
     console.log('[PH] handleStop called');
     audio.stopPlaylist();
   }, [audio]);
+
+  // Collaborative playlist handlers
+  const handleCreateCollaborativePlaylist = () => {
+    setCollaborativeDialogOpen(true);
+  };
+
+  const handleInviteToCollaboration = (playlist: CollaborativePlaylist) => {
+    setSelectedCollaborativePlaylist(playlist);
+    setInviteDialogOpen(true);
+  };
+
+  const handleCollaborativeDialogClose = () => {
+    setCollaborativeDialogOpen(false);
+  };
+
+  const handleInviteDialogClose = () => {
+    setInviteDialogOpen(false);
+    setSelectedCollaborativePlaylist(null);
+  };
+
+  // Conversion handlers
+  const handleConvertToCollaborative = (playlist: UnifiedPlaylist) => {
+    setPlaylistToConvert(playlist);
+    setConversionDialogOpen(true);
+  };
+
+  const handleConversionDialogClose = () => {
+    setConversionDialogOpen(false);
+    setPlaylistToConvert(null);
+  };
+
+  const handleConversionSuccess = (collaborativePlaylistId: string) => {
+    setSuccess(`Playlist "${playlistToConvert?.name}" successfully converted to collaborative!`);
+    // Reload playlists to show the new collaborative version
+    loadPlaylists();
+  };
+
+  // Join handlers
+  const handleJoinDialogOpen = () => {
+    setJoinDialogOpen(true);
+  };
+
+  const handleJoinDialogClose = () => {
+    setJoinDialogOpen(false);
+  };
+
+  const handleJoinSuccess = (playlistId: string) => {
+    setSuccess('Successfully joined collaborative playlist!');
+    // Reload playlists to show the joined playlist
+    loadPlaylists();
+  };
 
   // Function to copy text to clipboard
   const copyToClipboard = async (text: string) => {
@@ -229,6 +320,13 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
 
   useEffect(() => {
     loadPlaylists();
+    // Initialize collaboration store
+    collaborationStore.initialize();
+
+    // Cleanup on unmount
+    return () => {
+      collaborationStore.cleanup();
+    };
   }, []); // Initial load
 
   // --- End of useCallback wrapped functions ---
@@ -241,6 +339,14 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
   // Helper function to get clip count display text
   const getClipCountText = (playlist: UnifiedPlaylist): string => {
     const count = playlist.clips.length;
+
+    // Debug logging for playlist clip counts
+    console.log(`[Playlist Debug] ${playlist.name} (${playlist.id}): ${count} clips`, {
+      type: playlist.type,
+      clips: playlist.clips,
+      isCollaborative: playlist.isCollaborative
+    });
+
     if (playlist.type === 'youtube') {
       return `${count} video${count !== 1 ? 's' : ''}`;
     }
@@ -279,14 +385,125 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
       }
 
       // Load YouTube playlists from localStorage
+      // First, clean up any duplicate clip IDs
+      const { cleanupAllPlaylistDuplicateIds } = await import('../utils/youtubeUtils');
+      cleanupAllPlaylistDuplicateIds();
+
       const youtubePlaylistsData = getYouTubePlaylists();
+      console.log('🔍 Raw YouTube playlists from localStorage:', youtubePlaylistsData);
       const youtubePlaylists: UnifiedPlaylist[] = youtubePlaylistsData.map((playlist: YouTubePlaylist) => ({
         ...playlist,
         type: 'youtube' as const
       }));
+      console.log('🔍 Unified YouTube playlists:', youtubePlaylists);
 
-      // Combine both types of playlists
-      const allPlaylists = [...regularPlaylists, ...youtubePlaylists];
+      // Load collaborative playlists
+      console.log('🔍 Active collaborations:', activeCollaborations);
+      let collaborativePlaylists: UnifiedPlaylist[] = [];
+
+      try {
+        collaborativePlaylists = Object.values(activeCollaborations)
+        .filter((playlist): playlist is CollaborativePlaylist => {
+          // Filter out null, undefined, or invalid playlist objects
+          if (!playlist || typeof playlist !== 'object') {
+            console.warn('⚠️ Skipping invalid collaborative playlist:', playlist);
+            return false;
+          }
+
+          // Check for required properties
+          if (!playlist.id || !playlist.name) {
+            console.warn('⚠️ Skipping collaborative playlist missing required properties:', playlist);
+            return false;
+          }
+
+          return true;
+        })
+        .map((playlist: CollaborativePlaylist) => {
+        console.log('🔍 Processing collaborative playlist:', playlist.id, 'clips:', playlist.clips?.length || 0);
+
+        let dateString: string;
+        try {
+          if (playlist.createdAt instanceof Date) {
+            dateString = playlist.createdAt.toISOString();
+          } else if (playlist.createdAt && typeof playlist.createdAt === 'object' && 'toDate' in playlist.createdAt) {
+            // Firestore Timestamp
+            dateString = (playlist.createdAt as any).toDate().toISOString();
+          } else if (typeof playlist.createdAt === 'string') {
+            dateString = playlist.createdAt;
+          } else {
+            // Fallback to current date
+            console.warn('⚠️ No valid createdAt found for playlist:', playlist.id, 'using current date');
+            dateString = new Date().toISOString();
+          }
+        } catch (error) {
+          console.warn('⚠️ Error converting createdAt for playlist:', playlist.id, error);
+          dateString = new Date().toISOString();
+        }
+
+        try {
+          const unifiedPlaylist = {
+            id: playlist.id,
+            name: playlist.name || 'Untitled Collaborative Playlist',
+            date: dateString,
+            clips: Array.isArray(playlist.clips) ? playlist.clips : [],
+            drinkingSoundPath: playlist.drinkingSoundPath || undefined,
+            imagePath: playlist.imagePath || undefined,
+            type: (playlist.type as 'regular' | 'youtube') || 'youtube',
+            isCollaborative: true,
+            collaborationId: playlist.collaborationId || playlist.id
+          };
+
+          console.log('🔍 Unified collaborative playlist:', unifiedPlaylist.id, 'clips:', unifiedPlaylist.clips.length);
+          return unifiedPlaylist;
+        } catch (error) {
+          console.error('❌ Error creating unified playlist for:', playlist.id, error);
+          // Return a minimal valid playlist to prevent crashes
+          return {
+            id: playlist.id || `error_${Date.now()}`,
+            name: 'Error Loading Playlist',
+            date: new Date().toISOString(),
+            clips: [],
+            type: 'youtube' as const,
+            isCollaborative: true,
+            collaborationId: playlist.id || `error_${Date.now()}`
+          };
+        }
+      });
+      } catch (collaborativeError) {
+        console.error('❌ Error processing collaborative playlists:', collaborativeError);
+        // Set empty array to prevent crashes
+        collaborativePlaylists = [];
+      }
+
+      // Combine all types of playlists
+      const allPlaylists = [...regularPlaylists, ...youtubePlaylists, ...collaborativePlaylists];
+
+      console.log('📋 Playlist loading summary:', {
+        regular: regularPlaylists.length,
+        youtube: youtubePlaylists.length,
+        collaborative: collaborativePlaylists.length,
+        total: allPlaylists.length,
+        activeCollaborations: Object.keys(activeCollaborations).length
+      });
+
+      // Debug: Log each playlist's clip count and check for duplicate IDs
+      allPlaylists.forEach(playlist => {
+        const clipIds = playlist.clips.map(c => c.id);
+        const duplicateIds = clipIds.filter((id, index) => clipIds.indexOf(id) !== index);
+
+        console.log(`[Playlist Load Debug] ${playlist.name}: ${playlist.clips.length} clips`, {
+          id: playlist.id,
+          type: playlist.type,
+          isCollaborative: playlist.isCollaborative,
+          clips: playlist.clips.map(c => ({ id: c.id, name: c.name || c.title })),
+          duplicateClipIds: duplicateIds.length > 0 ? duplicateIds : 'None'
+        });
+
+        if (duplicateIds.length > 0) {
+          console.warn(`⚠️ Playlist "${playlist.name}" has duplicate clip IDs:`, duplicateIds);
+        }
+      });
+
       const sortedData = sortPlaylists(allPlaylists, sortBy, sortOrder);
       setPlaylists(sortedData);
     } catch (err) {
@@ -317,6 +534,11 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
       setPlaylists(sortedPlaylists);
     }
   }, [sortBy, sortOrder]);
+
+  // Reload playlists when collaborative playlists change
+  useEffect(() => {
+    loadPlaylists();
+  }, [activeCollaborations]);
 
 
 
@@ -405,7 +627,14 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
         const playlistToUpdate = playlists.find(p => p.id === currentPlaylistId);
         if (!playlistToUpdate) throw new Error('Playlist not found for update');
 
-        if (playlistToUpdate.type === 'youtube') {
+        if (playlistToUpdate.isCollaborative) {
+          // Handle collaborative playlist update
+          successFlag = await collaborationStore.updateCollaborativePlaylistMetadata(
+            playlistToUpdate.id,
+            { name: playlistName.trim() }
+          );
+          message = successFlag ? `Collaborative playlist "${playlistName}" updated.` : 'Failed to update collaborative playlist.';
+        } else if (playlistToUpdate.type === 'youtube') {
           // Handle YouTube playlist update
           const updatedYouTubePlaylist: YouTubePlaylist = {
             id: playlistToUpdate.id,
@@ -460,7 +689,33 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
     try {
       let successFlag = false;
 
-      if (playlist.type === 'youtube') {
+      if (playlist.isCollaborative) {
+        // Handle collaborative playlist deletion
+        try {
+          const collaborativePlaylist = Object.values(activeCollaborations)
+            .filter(p => p && typeof p === 'object' && p.id)
+            .find(p => p.id === playlist.id);
+
+          if (collaborativePlaylist) {
+            // Check if user is owner or collaborator
+            const currentUser = authService.getCurrentUser();
+            if (currentUser && collaborativePlaylist.ownerId === currentUser.uid) {
+              // Owner can delete the playlist
+              successFlag = await collaborationStore.deleteCollaborativePlaylist(playlist.id);
+            } else {
+              // Collaborator can only leave the playlist
+              successFlag = await collaborationStore.leaveCollaboration(playlist.id);
+            }
+          } else {
+            console.warn('⚠️ Collaborative playlist not found in activeCollaborations:', playlist.id);
+            // Try to leave anyway
+            successFlag = await collaborationStore.leaveCollaboration(playlist.id);
+          }
+        } catch (collaborativeDeleteError) {
+          console.error('❌ Error handling collaborative playlist deletion:', collaborativeDeleteError);
+          successFlag = false;
+        }
+      } else if (playlist.type === 'youtube') {
         // Handle YouTube playlist deletion
         deleteYouTubePlaylist(playlist.id);
         successFlag = true;
@@ -471,7 +726,12 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
       }
 
       if (successFlag) {
-        setSuccess(`Playlist "${playlist.name}" deleted.`);
+        const action = playlist.isCollaborative &&
+          Object.values(activeCollaborations)
+            .filter(p => p && typeof p === 'object' && p.id)
+            .find(p => p.id === playlist.id)?.ownerId !== authService.getCurrentUser()?.uid
+          ? 'left' : 'deleted';
+        setSuccess(`Playlist "${playlist.name}" ${action}.`);
         setPlaylists(prev => prev.filter(p => p.id !== playlist.id));
         setNewPlaylistDialog(false);
         setIsEditing(false);
@@ -793,10 +1053,37 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
                     }}
                   />
                 )}
+                {playlist.isCollaborative && (
+                  <Chip
+                    label="Collaborative"
+                    size="small"
+                    icon={<GroupIcon sx={{ fontSize: 12 }} />}
+                    sx={{
+                      height: 18,
+                      fontSize: '0.65rem',
+                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                      color: 'white',
+                      '& .MuiChip-label': {
+                        px: 1
+                      }
+                    }}
+                  />
+                )}
               </Typography>
               <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.8rem' }}>
                 {playlist.drinkingSoundPath ? 'Custom drinking sound' : 'Default drinking sound'}
               </Typography>
+
+              {/* User Presence for Collaborative Playlists */}
+              {playlist.isCollaborative && (
+                <Box sx={{ mt: 1 }}>
+                  <UserPresenceIndicator
+                    presence={collaborationStore.userPresence[playlist.id] || {}}
+                    playlistId={playlist.id}
+                    compact={true}
+                  />
+                </Box>
+              )}
             </Box>
 
             {/* Action Buttons */}
@@ -820,6 +1107,30 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
                 </IconButton>
               </Tooltip>
 
+
+              {playlist.isCollaborative && (
+                <Tooltip title="Invite Collaborators">
+                  <IconButton
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const collaborativePlaylist = activeCollaborations[playlist.id];
+                      if (collaborativePlaylist) {
+                        handleInviteToCollaboration(collaborativePlaylist);
+                      }
+                    }}
+                    sx={{
+                      bgcolor: 'action.hover',
+                      color: 'text.secondary',
+                      '&:hover': {
+                        bgcolor: 'secondary.main',
+                        color: 'white',
+                      },
+                    }}
+                  >
+                    <PersonAddIcon sx={{ fontSize: 20 }} />
+                  </IconButton>
+                </Tooltip>
+              )}
 
               <Tooltip title="View Details & Edit">
                 <IconButton
@@ -1077,21 +1388,39 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
                 >
                   {playlist.name}
                 </Typography>
-                {playlist.type === 'youtube' && (
-                  <Chip
-                    label="YouTube"
-                    size="small"
-                    sx={{
-                      height: cardSize < 250 ? 16 : 20,
-                      fontSize: cardSize < 250 ? '0.6rem' : '0.7rem',
-                      backgroundColor: '#FF0000',
-                      color: 'white',
-                      '& .MuiChip-label': {
-                        px: cardSize < 250 ? 0.5 : 1
-                      }
-                    }}
-                  />
-                )}
+                <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', justifyContent: 'center' }}>
+                  {playlist.type === 'youtube' && (
+                    <Chip
+                      label="YouTube"
+                      size="small"
+                      sx={{
+                        height: cardSize < 250 ? 16 : 20,
+                        fontSize: cardSize < 250 ? '0.6rem' : '0.7rem',
+                        backgroundColor: '#FF0000',
+                        color: 'white',
+                        '& .MuiChip-label': {
+                          px: cardSize < 250 ? 0.5 : 1
+                        }
+                      }}
+                    />
+                  )}
+                  {playlist.isCollaborative && (
+                    <Chip
+                      label="Collaborative"
+                      size="small"
+                      icon={<GroupIcon sx={{ fontSize: cardSize < 250 ? 10 : 12 }} />}
+                      sx={{
+                        height: cardSize < 250 ? 16 : 20,
+                        fontSize: cardSize < 250 ? '0.6rem' : '0.7rem',
+                        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                        color: 'white',
+                        '& .MuiChip-label': {
+                          px: cardSize < 250 ? 0.5 : 1
+                        }
+                      }}
+                    />
+                  )}
+                </Box>
               </Box>
 
               <Typography
@@ -1116,6 +1445,17 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
               >
                 {getClipCountText(playlist)}
               </Typography>
+
+              {/* User Presence for Collaborative Playlists */}
+              {playlist.isCollaborative && (
+                <Box sx={{ mt: 1 }}>
+                  <UserPresenceIndicator
+                    presence={collaborationStore.userPresence[playlist.id] || {}}
+                    playlistId={playlist.id}
+                    compact={true}
+                  />
+                </Box>
+              )}
 
               {/* Bottom Left - Drinking Sound Button */}
               <IconButton
@@ -1370,12 +1710,35 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
     navigate('/youtube');
   };
 
-  const handleSharePlaylist = (playlist: UnifiedPlaylist) => {
+  const handleSharePlaylist = async (playlist: UnifiedPlaylist) => {
     if (playlist.type !== 'youtube') {
       setError('Only YouTube playlists can be shared to the community');
       return;
     }
 
+    // Check if this playlist is already shared
+    try {
+      // Auto sign-in if Firebase is available and user is not authenticated
+      if (!authService.isAuthenticated()) {
+        await authService.autoSignIn();
+      }
+
+      if (authService.isAuthenticated()) {
+        const existingShared = await firebasePlaylistService.getSharedVersionOfPlaylist(playlist.id);
+
+        if (existingShared) {
+          // Playlist is already shared, open edit dialog
+          setPlaylistToEdit(existingShared);
+          setEditDialogOpen(true);
+          return;
+        }
+      }
+    } catch (error) {
+      console.error('Error checking for existing shared version:', error);
+      // Continue with sharing flow if check fails
+    }
+
+    // Playlist is not shared yet, open sharing dialog
     setPlaylistToShare(playlist);
     setSharingDialogOpen(true);
   };
@@ -1384,11 +1747,28 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
     setSuccess(`Playlist "${sharedPlaylist.name}" shared successfully! Share code: ${sharedPlaylist.shareCode}`);
     setSharingDialogOpen(false);
     setPlaylistToShare(null);
+
+    // Notify other components that a playlist was shared
+    window.dispatchEvent(new CustomEvent('playlistShared', { detail: sharedPlaylist }));
   };
 
   const handleSharingClose = () => {
     setSharingDialogOpen(false);
     setPlaylistToShare(null);
+  };
+
+  const handleEditSuccess = (updatedPlaylist: SharedPlaylist) => {
+    setSuccess(`Playlist "${updatedPlaylist.name}" updated successfully!`);
+    setEditDialogOpen(false);
+    setPlaylistToEdit(null);
+
+    // Notify other components that a playlist was updated
+    window.dispatchEvent(new CustomEvent('playlistShared', { detail: updatedPlaylist }));
+  };
+
+  const handleEditClose = () => {
+    setEditDialogOpen(false);
+    setPlaylistToEdit(null);
   };
 
   return (
@@ -1449,6 +1829,53 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
                 }}
               >
                 Create Playlist
+              </Button>
+              <Button
+                variant="contained"
+                color="secondary"
+                startIcon={<GroupIcon />}
+                onClick={handleCreateCollaborativePlaylist}
+                sx={{
+                  borderRadius: 2,
+                  px: 2.5,
+                  py: 0.75,
+                  fontWeight: 600,
+                  boxShadow: 2,
+                  fontSize: '0.875rem',
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  '&:hover': {
+                    boxShadow: 4,
+                    transform: 'translateY(-1px)',
+                    background: 'linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%)',
+                  },
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                Collaborate
+              </Button>
+              <Button
+                variant="outlined"
+                startIcon={<VpnKeyIcon />}
+                onClick={handleJoinDialogOpen}
+                sx={{
+                  borderRadius: 2,
+                  px: 2.5,
+                  py: 0.75,
+                  fontWeight: 600,
+                  borderWidth: 2,
+                  fontSize: '0.875rem',
+                  color: '#4CAF50',
+                  borderColor: '#4CAF50',
+                  '&:hover': {
+                    borderWidth: 2,
+                    transform: 'translateY(-1px)',
+                    bgcolor: '#4CAF50',
+                    color: 'white',
+                  },
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                Join with Code
               </Button>
               <Button
                 variant="outlined"
@@ -1917,9 +2344,13 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
                         }}
                       >
                         <List dense disablePadding>
-                          {playlist.clips.map((clip, index) => (
+                          {playlist.clips.map((clip, index) => {
+                            // Ensure unique key for each clip
+                            const uniqueKey = clip.id ? `${clip.id}-${index}` : `clip-${index}-${playlist.id}`;
+
+                            return (
                             <ListItem
-                              key={clip.id || index}
+                              key={uniqueKey}
                               divider={index < playlist.clips.length - 1}
                               sx={{
                                 bgcolor: index % 2 === 0 ? `${theme.palette.primary.main}08` : 'transparent',
@@ -1966,7 +2397,8 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
                                 }
                               />
                             </ListItem>
-                          ))}
+                            );
+                          })}
                         </List>
                       </Paper>
                     </Box>
@@ -2304,8 +2736,13 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
                   <Droppable droppableId="playlist-clips">
                     {(provided) => (
                       <div {...provided.droppableProps} ref={provided.innerRef}>
-                        {audio.currentPlaylist?.clips.map((clip, index) => (
-                          <Draggable key={clip.id || index} draggableId={clip.id || `clip-${index}`} index={index}>
+                        {audio.currentPlaylist?.clips.map((clip, index) => {
+                          // Ensure unique keys for draggable items
+                          const uniqueKey = clip.id ? `${clip.id}-${index}` : `clip-${index}-${audio.currentPlaylist?.id}`;
+                          const uniqueDraggableId = clip.id ? `${clip.id}-drag-${index}` : `drag-${index}-${audio.currentPlaylist?.id}`;
+
+                          return (
+                          <Draggable key={uniqueKey} draggableId={uniqueDraggableId} index={index}>
                             {(provided, snapshot) => (
                               <div
                                 ref={provided.innerRef}
@@ -2385,7 +2822,8 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
                               </div>
                             )}
                           </Draggable>
-                        ))}
+                          );
+                        })}
                         {provided.placeholder}
                       </div>
                     )}
@@ -2616,11 +3054,14 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
                       onClick={() => {
                         if (selectedPlaylistForManagement.type === 'youtube') {
                           // Store the playlist context for editing and navigate to YouTube page
+                          console.log('🔍 Creating edit context for playlist:', selectedPlaylistForManagement);
+                          console.log('🔍 Playlist ID being used:', selectedPlaylistForManagement.id);
                           const editContext = {
                             playlistId: selectedPlaylistForManagement.id,
                             clipIndex: 0,
                             timestamp: Date.now()
                           };
+                          console.log('🔍 Edit context created:', editContext);
                           localStorage.setItem('youtube_edit_context', JSON.stringify(editContext));
                           navigate('/youtube');
                         } else {
@@ -2668,6 +3109,80 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
                         Share to Community
                       </Button>
                     )}
+
+                    {/* Make Collaborative Button for Non-Collaborative Playlists */}
+                    {!selectedPlaylistForManagement?.isCollaborative && (
+                      <Button
+                        variant="outlined"
+                        startIcon={<GroupIcon />}
+                        onClick={() => {
+                          handleConvertToCollaborative(selectedPlaylistForManagement);
+                          setEnhancedDialogOpen(false);
+                        }}
+                        fullWidth
+                        sx={{
+                          color: '#4CAF50',
+                          borderColor: '#4CAF50',
+                          '&:hover': {
+                            bgcolor: '#4CAF50',
+                            color: 'white'
+                          }
+                        }}
+                      >
+                        Make Collaborative
+                      </Button>
+                    )}
+
+                    {/* Collaboration Invite Button for Collaborative Playlists */}
+                    {selectedPlaylistForManagement?.isCollaborative && (
+                      <Button
+                        variant="outlined"
+                        startIcon={<PersonAddIcon />}
+                        onClick={() => {
+                          const collaborativePlaylist = Object.values(activeCollaborations).find(
+                            p => p.id === selectedPlaylistForManagement.id
+                          );
+                          if (collaborativePlaylist) {
+                            handleInviteToCollaboration(collaborativePlaylist);
+                            setEnhancedDialogOpen(false);
+                          }
+                        }}
+                        fullWidth
+                        sx={{
+                          color: 'info.main',
+                          borderColor: 'info.main',
+                          '&:hover': {
+                            bgcolor: 'info.main',
+                            color: 'white'
+                          }
+                        }}
+                      >
+                        Invite Collaborators
+                      </Button>
+                    )}
+
+                    {/* Delete Button with confirmation */}
+                    <Button
+                      variant="outlined"
+                      startIcon={<DeleteIcon />}
+                      onClick={() => {
+                        if (window.confirm(`Are you sure you want to delete "${selectedPlaylistForManagement.name}"? This action cannot be undone.`)) {
+                          handleDeletePlaylist(selectedPlaylistForManagement);
+                          setEnhancedDialogOpen(false);
+                        }
+                      }}
+                      fullWidth
+                      sx={{
+                        color: 'error.main',
+                        borderColor: 'error.main',
+                        '&:hover': {
+                          bgcolor: 'error.main',
+                          color: 'white'
+                        }
+                      }}
+                    >
+                      Delete Playlist
+                    </Button>
                   </Box>
                 </Paper>
 
@@ -2738,6 +3253,51 @@ const Playlists: React.FC<PlaylistsProps> = ({ onPlayMix }) => {
         playlist={playlistToShare?.type === 'youtube' ? playlistToShare as any : null}
         onSuccess={handleSharingSuccess}
       />
+
+      {/* Playlist Edit Dialog */}
+      <PlaylistEditDialog
+        open={editDialogOpen}
+        onClose={handleEditClose}
+        playlist={playlistToEdit}
+        onSuccess={handleEditSuccess}
+      />
+
+      {/* Collaborative Playlist Dialog */}
+      <CollaborativePlaylistDialog
+        open={collaborativeDialogOpen}
+        onClose={handleCollaborativeDialogClose}
+      />
+
+      {/* Collaboration Invite Dialog */}
+      {selectedCollaborativePlaylist && (
+        <CollaborationInviteDialog
+          open={inviteDialogOpen}
+          onClose={handleInviteDialogClose}
+          playlistId={selectedCollaborativePlaylist.id}
+          playlistName={selectedCollaborativePlaylist.name}
+          inviteCode={selectedCollaborativePlaylist.inviteCode}
+        />
+      )}
+
+      {/* Playlist Conversion Dialog */}
+      {playlistToConvert && (
+        <PlaylistConversionDialog
+          open={conversionDialogOpen}
+          onClose={handleConversionDialogClose}
+          playlist={playlistToConvert}
+          playlistType={playlistToConvert.type === 'youtube' ? 'youtube' : 'regular'}
+          onSuccess={handleConversionSuccess}
+        />
+      )}
+
+      {/* Join Collaborative Playlist Dialog */}
+      <JoinCollaborativePlaylistDialog
+        open={joinDialogOpen}
+        onClose={handleJoinDialogClose}
+        onSuccess={handleJoinSuccess}
+      />
+
+
 
     </Box>
   );

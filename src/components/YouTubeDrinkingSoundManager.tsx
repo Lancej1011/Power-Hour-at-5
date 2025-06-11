@@ -39,6 +39,15 @@ import {
   StepContent,
   Backdrop,
   LinearProgress,
+  Checkbox,
+  FormControlLabel,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  ToggleButtonGroup,
+  ToggleButton,
+  ListItemIcon,
 } from '@mui/material';
 import {
   LocalBar as LocalBarIcon,
@@ -71,6 +80,10 @@ import {
   Preview as PreviewIcon,
   Save as SaveIcon,
   CloudUpload as CloudUploadIcon,
+  ViewList as ViewListIcon,
+  ViewModule as ViewModuleIcon,
+  ViewComfy as ViewComfyIcon,
+  Check as CheckIcon,
 } from '@mui/icons-material';
 import { useTheme } from '@mui/material/styles';
 import { Howl } from 'howler';
@@ -168,6 +181,13 @@ const YouTubeDrinkingSoundManager: React.FC<YouTubeDrinkingSoundManagerProps> = 
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [showUrlInput, setShowUrlInput] = useState(false);
 
+  // View mode state for drinking clips library
+  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'compact'>('compact');
+  const [searchFilter, setSearchFilter] = useState('');
+  const [sortBy, setSortBy] = useState<'name' | 'type' | 'duration' | 'recent'>('recent');
+  const [selectedClipsForDeletion, setSelectedClipsForDeletion] = useState<Set<string>>(new Set());
+  const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
+
   const previewHowlRef = useRef<Howl | null>(null);
   const youtubePlayerRef = useRef<any>(null);
   const previewProgressRef = useRef<NodeJS.Timeout | null>(null);
@@ -193,6 +213,69 @@ const YouTubeDrinkingSoundManager: React.FC<YouTubeDrinkingSoundManagerProps> = 
       console.error('🍻 Error saving drinking clips to localStorage:', error);
     }
   }, [drinkingSounds]);
+
+  // Filter and sort drinking sounds
+  const filteredAndSortedSounds = React.useMemo(() => {
+    let filtered = drinkingSounds;
+
+    // Apply search filter
+    if (searchFilter.trim()) {
+      const searchTerm = searchFilter.toLowerCase();
+      filtered = filtered.filter(sound =>
+        sound.name.toLowerCase().includes(searchTerm) ||
+        sound.type.toLowerCase().includes(searchTerm)
+      );
+    }
+
+    // Apply sorting
+    filtered.sort((a, b) => {
+      switch (sortBy) {
+        case 'name':
+          return a.name.localeCompare(b.name);
+        case 'type':
+          return a.type.localeCompare(b.type);
+        case 'duration':
+          return (a.duration || 0) - (b.duration || 0);
+        case 'recent':
+        default:
+          // Most recently added first (by array order)
+          return drinkingSounds.indexOf(b) - drinkingSounds.indexOf(a);
+      }
+    });
+
+    return filtered;
+  }, [drinkingSounds, searchFilter, sortBy]);
+
+  // Clip selection and deletion helpers
+  const toggleClipSelection = useCallback((clipId: string) => {
+    setSelectedClipsForDeletion(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(clipId)) {
+        newSet.delete(clipId);
+      } else {
+        newSet.add(clipId);
+      }
+      return newSet;
+    });
+  }, []);
+
+  const selectAllClips = useCallback(() => {
+    setSelectedClipsForDeletion(new Set(filteredAndSortedSounds.map(sound => sound.id)));
+  }, [filteredAndSortedSounds]);
+
+  const clearSelection = useCallback(() => {
+    setSelectedClipsForDeletion(new Set());
+  }, []);
+
+  const deleteSelectedClips = useCallback(() => {
+    if (selectedClipsForDeletion.size === 0) return;
+
+    setDrinkingSounds(prev =>
+      prev.filter(sound => !selectedClipsForDeletion.has(sound.id))
+    );
+    setSelectedClipsForDeletion(new Set());
+    setShowDeleteConfirmation(false);
+  }, [selectedClipsForDeletion]);
 
   // Search categories for better user experience
   const searchCategories: SearchCategory[] = [
@@ -749,12 +832,104 @@ const YouTubeDrinkingSoundManager: React.FC<YouTubeDrinkingSoundManagerProps> = 
         }, sound.duration * 1000);
       }
     } else if (sound.type === 'youtube' && sound.youtubeId) {
-      // For YouTube preview, we'll just show it's selected for now
-      // TODO: Could implement actual YouTube preview in the future
+      // For YouTube preview, create an embedded iframe preview
+      console.log('🍻 Previewing YouTube clip:', sound.youtubeId, 'Start:', sound.startTime, 'Duration:', sound.duration);
+
       setPreviewingSound(sound.id);
-      setTimeout(() => {
+
+      // Create preview overlay
+      const overlay = document.createElement('div');
+      overlay.style.position = 'fixed';
+      overlay.style.top = '0';
+      overlay.style.left = '0';
+      overlay.style.width = '100%';
+      overlay.style.height = '100%';
+      overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
+      overlay.style.zIndex = '9999';
+      overlay.style.display = 'flex';
+      overlay.style.alignItems = 'center';
+      overlay.style.justifyContent = 'center';
+      overlay.id = 'youtube-preview-overlay';
+
+      // Create video container
+      const container = document.createElement('div');
+      container.style.position = 'relative';
+      container.style.width = '80%';
+      container.style.maxWidth = '800px';
+      container.style.height = '450px';
+      container.style.backgroundColor = '#000';
+      container.style.borderRadius = '12px';
+      container.style.overflow = 'hidden';
+      container.style.boxShadow = '0 20px 60px rgba(0, 0, 0, 0.5)';
+
+      // Create close button
+      const closeButton = document.createElement('button');
+      closeButton.innerHTML = '✕';
+      closeButton.style.position = 'absolute';
+      closeButton.style.top = '10px';
+      closeButton.style.right = '10px';
+      closeButton.style.background = 'rgba(255, 255, 255, 0.9)';
+      closeButton.style.color = '#000';
+      closeButton.style.border = 'none';
+      closeButton.style.borderRadius = '50%';
+      closeButton.style.width = '40px';
+      closeButton.style.height = '40px';
+      closeButton.style.cursor = 'pointer';
+      closeButton.style.fontSize = '18px';
+      closeButton.style.fontWeight = 'bold';
+      closeButton.style.zIndex = '10000';
+      closeButton.style.display = 'flex';
+      closeButton.style.alignItems = 'center';
+      closeButton.style.justifyContent = 'center';
+
+      // Create iframe
+      const iframe = document.createElement('iframe');
+      const startTime = sound.startTime || 0;
+      iframe.src = `https://www.youtube.com/embed/${sound.youtubeId}?start=${startTime}&autoplay=1&controls=1&modestbranding=1&rel=0`;
+      iframe.style.width = '100%';
+      iframe.style.height = '100%';
+      iframe.style.border = 'none';
+      iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
+      iframe.allowFullscreen = true;
+
+      // Add info overlay
+      const infoOverlay = document.createElement('div');
+      infoOverlay.style.position = 'absolute';
+      infoOverlay.style.bottom = '10px';
+      infoOverlay.style.left = '10px';
+      infoOverlay.style.background = 'rgba(0, 0, 0, 0.8)';
+      infoOverlay.style.color = 'white';
+      infoOverlay.style.padding = '8px 12px';
+      infoOverlay.style.borderRadius = '6px';
+      infoOverlay.style.fontSize = '14px';
+      infoOverlay.style.zIndex = '10000';
+      infoOverlay.innerHTML = `Preview: ${sound.name}<br>Duration: ${sound.duration}s | Start: ${formatTimeToMMSS(startTime)}`;
+
+      // Assemble the preview
+      container.appendChild(iframe);
+      container.appendChild(closeButton);
+      container.appendChild(infoOverlay);
+      overlay.appendChild(container);
+      document.body.appendChild(overlay);
+
+      // Close functionality
+      const closePreview = () => {
+        if (document.body.contains(overlay)) {
+          document.body.removeChild(overlay);
+        }
         setPreviewingSound(null);
-      }, (sound.duration || 5) * 1000);
+      };
+
+      closeButton.onclick = closePreview;
+      overlay.onclick = (e) => {
+        if (e.target === overlay) closePreview();
+      };
+
+      // Auto-close after duration (optional)
+      setTimeout(() => {
+        closePreview();
+      }, (sound.duration || 30) * 1000);
+
     } else {
       console.error('🍻 Unable to preview sound - missing data:', sound);
     }
@@ -855,11 +1030,23 @@ const YouTubeDrinkingSoundManager: React.FC<YouTubeDrinkingSoundManagerProps> = 
     handleSetDrinkingSound(randomSound);
   }, [drinkingSounds, handleSetDrinkingSound]);
 
-  // Clear all sounds
+  // State for confirmation dialog
+  const [clearAllDialogOpen, setClearAllDialogOpen] = useState(false);
+
+  // Clear all sounds with confirmation
   const clearAllSounds = useCallback(() => {
+    setClearAllDialogOpen(true);
+  }, []);
+
+  // Confirm clear all sounds
+  const confirmClearAllSounds = useCallback(() => {
     stopPreview();
     setDrinkingSounds([]);
+    setClearAllDialogOpen(false);
+    setSelectedClipsForDeletion(new Set());
   }, [stopPreview]);
+
+
 
   // Enhanced dialog close handler
   const handleClose = useCallback(() => {
@@ -1080,7 +1267,7 @@ const YouTubeDrinkingSoundManager: React.FC<YouTubeDrinkingSoundManagerProps> = 
             </Box>
 
             {/* Action Buttons */}
-            <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, mb: 4 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, mb: 4, flexWrap: 'wrap' }}>
               <Button
                 variant="outlined"
                 startIcon={<ArrowBackIcon />}
@@ -1102,7 +1289,33 @@ const YouTubeDrinkingSoundManager: React.FC<YouTubeDrinkingSoundManagerProps> = 
               {drinkingSounds.length > 0 && (
                 <Button
                   variant="outlined"
+                  onClick={() => {
+                    if (selectedClipsForDeletion.size === drinkingSounds.length) {
+                      setSelectedClipsForDeletion(new Set());
+                    } else {
+                      setSelectedClipsForDeletion(new Set(drinkingSounds.map(s => s.id)));
+                    }
+                  }}
+                  sx={{ borderRadius: 3, px: 3 }}
+                >
+                  {selectedClipsForDeletion.size === drinkingSounds.length ? 'Deselect All' : 'Select All'}
+                </Button>
+              )}
+              {selectedClipsForDeletion.size > 0 && (
+                <Button
+                  variant="outlined"
                   color="error"
+                  startIcon={<DeleteIcon />}
+                  onClick={deleteSelectedClips}
+                  sx={{ borderRadius: 3, px: 3 }}
+                >
+                  Delete Selected ({selectedClipsForDeletion.size})
+                </Button>
+              )}
+              {drinkingSounds.length > 0 && (
+                <Button
+                  variant="outlined"
+                  color="warning"
                   startIcon={<ClearIcon />}
                   onClick={clearAllSounds}
                   sx={{ borderRadius: 3, px: 3 }}
@@ -1142,114 +1355,273 @@ const YouTubeDrinkingSoundManager: React.FC<YouTubeDrinkingSoundManagerProps> = 
                 </Button>
               </Box>
             ) : (
-              <Grid container spacing={3}>
-                {drinkingSounds.map((sound, index) => (
-                  <Grid item xs={12} sm={6} md={4} key={sound.id}>
-                    <Card
-                      sx={{
-                        borderRadius: 3,
-                        border: `1px solid ${theme.palette.divider}`,
-                        background: `linear-gradient(135deg, ${theme.palette.background.paper} 0%, rgba(255,255,255,0.02) 100%)`,
-                        transition: 'all 0.3s ease',
-                        '&:hover': {
-                          transform: 'translateY(-2px)',
-                          boxShadow: `0 8px 25px ${theme.palette.primary.main}20`,
-                        }
-                      }}
-                    >
-                      <CardContent sx={{ p: 3 }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                          {sound.type === 'audio' ? (
-                            <AudioFileIcon sx={{ color: theme.palette.secondary.main, fontSize: 32 }} />
-                          ) : (
-                            <YouTubeIcon sx={{ color: '#FF0000', fontSize: 32 }} />
-                          )}
-                          <Box sx={{ flex: 1 }}>
-                            <Typography variant="h6" fontWeight="bold" gutterBottom>
-                              {sound.name}
-                            </Typography>
-                            <Typography variant="body2" color="text.secondary">
-                              {sound.type === 'youtube' ? 'YouTube Clip' : 'Audio File'}
-                            </Typography>
-                          </Box>
-                        </Box>
+              <Box>
+                {/* Library Controls */}
+                <Box sx={{ mb: 3, p: 3, bgcolor: 'background.paper', borderRadius: 2, border: `1px solid ${theme.palette.divider}` }}>
+                  <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2, alignItems: { md: 'center' }, justifyContent: 'space-between', mb: 2 }}>
+                    {/* Search and Filter */}
+                    <Box sx={{ display: 'flex', gap: 2, flex: 1, maxWidth: { md: '400px' } }}>
+                      <TextField
+                        size="small"
+                        placeholder="Search clips..."
+                        value={searchFilter}
+                        onChange={(e) => setSearchFilter(e.target.value)}
+                        InputProps={{
+                          startAdornment: <SearchIcon sx={{ color: 'text.secondary', mr: 1 }} />,
+                        }}
+                        sx={{ flex: 1 }}
+                      />
+                      <FormControl size="small" sx={{ minWidth: 120 }}>
+                        <InputLabel>Sort by</InputLabel>
+                        <Select
+                          value={sortBy}
+                          label="Sort by"
+                          onChange={(e) => setSortBy(e.target.value as any)}
+                        >
+                          <MenuItem value="recent">Recent</MenuItem>
+                          <MenuItem value="name">Name</MenuItem>
+                          <MenuItem value="type">Type</MenuItem>
+                          <MenuItem value="duration">Duration</MenuItem>
+                        </Select>
+                      </FormControl>
+                    </Box>
 
-                        {sound.duration && (
-                          <Chip
-                            label={`${sound.duration}s`}
-                            size="small"
-                            sx={{
-                              mb: 2,
-                              background: `linear-gradient(135deg, ${theme.palette.primary.main}20 0%, ${theme.palette.secondary.main}20 100%)`,
-                              color: theme.palette.primary.main,
-                              fontWeight: 'bold'
-                            }}
-                          />
-                        )}
+                    {/* View Mode Toggle */}
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <ToggleButtonGroup
+                        value={viewMode}
+                        exclusive
+                        onChange={(e, newMode) => newMode && setViewMode(newMode)}
+                        size="small"
+                      >
+                        <ToggleButton value="compact" aria-label="compact view">
+                          <ViewListIcon />
+                        </ToggleButton>
+                        <ToggleButton value="list" aria-label="list view">
+                          <ViewModuleIcon />
+                        </ToggleButton>
+                        <ToggleButton value="grid" aria-label="grid view">
+                          <ViewComfyIcon />
+                        </ToggleButton>
+                      </ToggleButtonGroup>
+                    </Box>
+                  </Box>
 
-                        <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
-                          <IconButton
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              previewingSound === sound.id ? stopPreview() : previewSound(sound);
-                            }}
-                            sx={{
-                              background: previewingSound === sound.id
-                                ? `linear-gradient(135deg, ${theme.palette.secondary.main} 0%, ${theme.palette.primary.main} 100%)`
-                                : `linear-gradient(135deg, ${theme.palette.primary.main}20 0%, ${theme.palette.secondary.main}20 100%)`,
-                              color: previewingSound === sound.id ? 'white' : theme.palette.primary.main,
-                              '&:hover': {
-                                background: `linear-gradient(135deg, ${theme.palette.primary.main} 0%, ${theme.palette.secondary.main} 100%)`,
-                                color: 'white',
-                              }
-                            }}
-                          >
-                            {previewingSound === sound.id ? <StopIcon /> : <PlayArrowIcon />}
-                          </IconButton>
-                          <IconButton
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              removeDrinkingSound(sound.id);
-                            }}
-                            sx={{
-                              color: theme.palette.error.main,
-                              '&:hover': {
-                                background: `${theme.palette.error.main}20`,
-                              }
-                            }}
-                          >
-                            <DeleteIcon />
-                          </IconButton>
-                        </Box>
+                  {/* Selection Controls */}
+                  <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <Typography variant="body2" color="text.secondary">
+                      {filteredAndSortedSounds.length} clips
+                      {selectedClipsForDeletion.size > 0 && ` (${selectedClipsForDeletion.size} selected)`}
+                    </Typography>
 
-                        {/* Use This Clip Button */}
+                    {filteredAndSortedSounds.length > 0 && (
+                      <>
                         <Button
-                          fullWidth
-                          variant="contained"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            console.log('🍻 Use This Clip clicked for sound:', sound.id, sound.name);
-                            // Set the drinking sound and close dialog
-                            handleSetDrinkingSound(sound);
-                          }}
+                          size="small"
+                          onClick={selectedClipsForDeletion.size === filteredAndSortedSounds.length ? clearSelection : selectAllClips}
+                        >
+                          {selectedClipsForDeletion.size === filteredAndSortedSounds.length ? 'Clear All' : 'Select All'}
+                        </Button>
+
+                        {selectedClipsForDeletion.size > 0 && (
+                          <Button
+                            size="small"
+                            color="error"
+                            startIcon={<DeleteIcon />}
+                            onClick={() => setShowDeleteConfirmation(true)}
+                          >
+                            Delete Selected ({selectedClipsForDeletion.size})
+                          </Button>
+                        )}
+                      </>
+                    )}
+                  </Box>
+                </Box>
+
+                {/* Clips Display */}
+                {viewMode === 'compact' ? (
+                  // Compact List View
+                  <List sx={{ bgcolor: 'background.paper', borderRadius: 2, border: `1px solid ${theme.palette.divider}` }}>
+                    {filteredAndSortedSounds.map((sound, index) => (
+                      <React.Fragment key={sound.id}>
+                        <ListItem
                           sx={{
-                            borderRadius: 2,
                             py: 1,
-                            fontSize: '0.9rem',
-                            fontWeight: 'bold',
-                            background: `linear-gradient(135deg, ${theme.palette.primary.main} 0%, ${theme.palette.secondary.main} 100%)`,
-                            '&:hover': {
-                              background: `linear-gradient(135deg, ${theme.palette.primary.dark} 0%, ${theme.palette.secondary.dark} 100%)`,
-                            }
+                            '&:hover': { bgcolor: 'action.hover' }
                           }}
                         >
-                          Use This Clip
-                        </Button>
-                      </CardContent>
-                    </Card>
+                          <ListItemIcon sx={{ minWidth: 40 }}>
+                            <Checkbox
+                              checked={selectedClipsForDeletion.has(sound.id)}
+                              onChange={() => toggleClipSelection(sound.id)}
+                              size="small"
+                            />
+                          </ListItemIcon>
+                          <ListItemIcon sx={{ minWidth: 40 }}>
+                            {sound.type === 'audio' ? (
+                              <AudioFileIcon sx={{ color: theme.palette.secondary.main }} />
+                            ) : (
+                              <YouTubeIcon sx={{ color: '#FF0000' }} />
+                            )}
+                          </ListItemIcon>
+                          <ListItemText
+                            primary={sound.name}
+                            secondary={`${sound.type === 'youtube' ? 'YouTube' : 'Audio'} • ${sound.duration || '?'}s`}
+                            primaryTypographyProps={{ variant: 'body2', fontWeight: 500 }}
+                            secondaryTypographyProps={{ variant: 'caption' }}
+                          />
+                          <Box sx={{ display: 'flex', gap: 1 }}>
+                            <IconButton
+                              size="small"
+                              onClick={() => previewingSound === sound.id ? stopPreview() : previewSound(sound)}
+                              sx={{ color: previewingSound === sound.id ? 'primary.main' : 'text.secondary' }}
+                            >
+                              {previewingSound === sound.id ? <StopIcon /> : <PlayArrowIcon />}
+                            </IconButton>
+                            <IconButton
+                              size="small"
+                              onClick={() => handleSetDrinkingSound(sound)}
+                              sx={{ color: 'primary.main' }}
+                            >
+                              <CheckIcon />
+                            </IconButton>
+                            <IconButton
+                              size="small"
+                              onClick={() => removeDrinkingSound(sound.id)}
+                              sx={{ color: 'error.main' }}
+                            >
+                              <DeleteIcon />
+                            </IconButton>
+                          </Box>
+                        </ListItem>
+                        {index < filteredAndSortedSounds.length - 1 && <Divider />}
+                      </React.Fragment>
+                    ))}
+                  </List>
+                ) : viewMode === 'list' ? (
+                  // Medium List View
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {filteredAndSortedSounds.map((sound) => (
+                      <Card
+                        key={sound.id}
+                        sx={{
+                          borderRadius: 2,
+                          border: `1px solid ${theme.palette.divider}`,
+                          '&:hover': { boxShadow: 2 }
+                        }}
+                      >
+                        <CardContent sx={{ p: 2 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                            <Checkbox
+                              checked={selectedClipsForDeletion.has(sound.id)}
+                              onChange={() => toggleClipSelection(sound.id)}
+                            />
+                            {sound.type === 'audio' ? (
+                              <AudioFileIcon sx={{ color: theme.palette.secondary.main, fontSize: 32 }} />
+                            ) : (
+                              <YouTubeIcon sx={{ color: '#FF0000', fontSize: 32 }} />
+                            )}
+                            <Box sx={{ flex: 1 }}>
+                              <Typography variant="subtitle1" fontWeight="bold">
+                                {sound.name}
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                {sound.type === 'youtube' ? 'YouTube Clip' : 'Audio File'} • {sound.duration || '?'}s
+                              </Typography>
+                            </Box>
+                            <Box sx={{ display: 'flex', gap: 1 }}>
+                              <IconButton
+                                onClick={() => previewingSound === sound.id ? stopPreview() : previewSound(sound)}
+                                sx={{ color: previewingSound === sound.id ? 'primary.main' : 'text.secondary' }}
+                              >
+                                {previewingSound === sound.id ? <StopIcon /> : <PlayArrowIcon />}
+                              </IconButton>
+                              <Button
+                                variant="contained"
+                                size="small"
+                                onClick={() => handleSetDrinkingSound(sound)}
+                                sx={{ minWidth: 80 }}
+                              >
+                                Use
+                              </Button>
+                              <IconButton
+                                onClick={() => removeDrinkingSound(sound.id)}
+                                sx={{ color: 'error.main' }}
+                              >
+                                <DeleteIcon />
+                              </IconButton>
+                            </Box>
+                          </Box>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </Box>
+                ) : (
+                  // Original Grid View (more compact)
+                  <Grid container spacing={2}>
+                    {filteredAndSortedSounds.map((sound) => (
+                      <Grid item xs={12} sm={6} lg={4} xl={3} key={sound.id}>
+                        <Card
+                          sx={{
+                            borderRadius: 2,
+                            border: `1px solid ${theme.palette.divider}`,
+                            height: '100%',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            '&:hover': { transform: 'translateY(-2px)', boxShadow: 3 }
+                          }}
+                        >
+                          <CardContent sx={{ p: 2, flex: 1 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
+                              <Checkbox
+                                checked={selectedClipsForDeletion.has(sound.id)}
+                                onChange={() => toggleClipSelection(sound.id)}
+                                size="small"
+                              />
+                              {sound.type === 'audio' ? (
+                                <AudioFileIcon sx={{ color: theme.palette.secondary.main, fontSize: 24 }} />
+                              ) : (
+                                <YouTubeIcon sx={{ color: '#FF0000', fontSize: 24 }} />
+                              )}
+                            </Box>
+                            <Typography variant="body2" fontWeight="bold" sx={{ mb: 1, lineHeight: 1.3 }}>
+                              {sound.name}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+                              {sound.type === 'youtube' ? 'YouTube' : 'Audio'} • {sound.duration || '?'}s
+                            </Typography>
+                            <Box sx={{ display: 'flex', gap: 0.5, mt: 'auto' }}>
+                              <IconButton
+                                size="small"
+                                onClick={() => previewingSound === sound.id ? stopPreview() : previewSound(sound)}
+                                sx={{ color: previewingSound === sound.id ? 'primary.main' : 'text.secondary' }}
+                              >
+                                {previewingSound === sound.id ? <StopIcon /> : <PlayArrowIcon />}
+                              </IconButton>
+                              <IconButton
+                                size="small"
+                                onClick={() => removeDrinkingSound(sound.id)}
+                                sx={{ color: 'error.main' }}
+                              >
+                                <DeleteIcon />
+                              </IconButton>
+                            </Box>
+                            <Button
+                              fullWidth
+                              variant="contained"
+                              size="small"
+                              onClick={() => handleSetDrinkingSound(sound)}
+                              sx={{ mt: 1, py: 0.5 }}
+                            >
+                              Use
+                            </Button>
+                          </CardContent>
+                        </Card>
+                      </Grid>
+                    ))}
                   </Grid>
-                ))}
-              </Grid>
+                )}
+              </Box>
             )}
           </Container>
         )}
@@ -1390,7 +1762,7 @@ const YouTubeDrinkingSoundManager: React.FC<YouTubeDrinkingSoundManagerProps> = 
                       {/* Modern Search Results Grid */}
                       <Grid container spacing={2}>
                         {searchResults.map((video) => (
-                          <Grid item xs={12} sm={6} md={4} lg={3} xl={2.4} key={video.id}>
+                          <Grid item xs={12} sm={6} lg={4} xl={3} key={video.id}>
                             <Card
                               sx={{
                                 cursor: 'pointer',
@@ -2149,6 +2521,132 @@ const YouTubeDrinkingSoundManager: React.FC<YouTubeDrinkingSoundManagerProps> = 
 
       </DialogContent>
 
+      {/* Clear All Confirmation Dialog */}
+      <Dialog
+        open={clearAllDialogOpen}
+        onClose={() => setClearAllDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 3,
+            background: `linear-gradient(135deg, ${theme.palette.background.paper} 0%, ${theme.palette.background.default} 100%)`,
+            border: `1px solid ${theme.palette.divider}`,
+          }
+        }}
+      >
+        <DialogTitle sx={{
+          background: `linear-gradient(135deg, ${theme.palette.warning.main} 0%, ${theme.palette.error.main} 100%)`,
+          color: 'white',
+          borderRadius: '12px 12px 0 0',
+          mb: 0
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <ClearIcon sx={{ fontSize: 28 }} />
+            <Typography variant="h6" fontWeight="bold">
+              Clear All Drinking Clips
+            </Typography>
+          </Box>
+        </DialogTitle>
+
+        <DialogContent sx={{ p: 3 }}>
+          <Alert severity="warning" sx={{ mb: 3 }}>
+            <Typography variant="body1" fontWeight="bold" gutterBottom>
+              This action cannot be undone!
+            </Typography>
+            <Typography variant="body2">
+              You are about to permanently delete all {drinkingSounds.length} drinking clips from your library.
+            </Typography>
+          </Alert>
+
+          <Typography variant="body1" color="text.secondary">
+            Are you sure you want to clear all drinking clips? This will remove:
+          </Typography>
+
+          <Box sx={{ mt: 2, pl: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              • All YouTube clips ({drinkingSounds.filter(s => s.type === 'youtube').length} clips)
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              • All audio files ({drinkingSounds.filter(s => s.type === 'audio').length} files)
+            </Typography>
+          </Box>
+        </DialogContent>
+
+        <DialogActions sx={{ p: 3, gap: 2 }}>
+          <Button
+            onClick={() => setClearAllDialogOpen(false)}
+            variant="outlined"
+            sx={{
+              borderRadius: 2,
+              px: 3,
+              color: theme.palette.text.primary,
+              borderColor: theme.palette.divider,
+              '&:hover': {
+                borderColor: theme.palette.primary.main,
+                backgroundColor: `${theme.palette.primary.main}10`,
+              }
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={confirmClearAllSounds}
+            variant="contained"
+            color="error"
+            sx={{
+              borderRadius: 2,
+              px: 3,
+              fontWeight: 'bold',
+              background: `linear-gradient(135deg, ${theme.palette.error.main} 0%, ${theme.palette.error.dark} 100%)`,
+              '&:hover': {
+                background: `linear-gradient(135deg, ${theme.palette.error.dark} 0%, ${theme.palette.error.main} 100%)`,
+              }
+            }}
+          >
+            Clear All ({drinkingSounds.length} clips)
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Selected Clips Confirmation Dialog */}
+      <Dialog
+        open={showDeleteConfirmation}
+        onClose={() => setShowDeleteConfirmation(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          <Typography variant="h6" fontWeight="bold">
+            Delete Selected Clips
+          </Typography>
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" sx={{ mb: 2 }}>
+            Are you sure you want to delete {selectedClipsForDeletion.size} selected clip{selectedClipsForDeletion.size !== 1 ? 's' : ''}?
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            This action cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ p: 3, gap: 2 }}>
+          <Button
+            onClick={() => setShowDeleteConfirmation(false)}
+            variant="outlined"
+            sx={{ borderRadius: 2, px: 3 }}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={deleteSelectedClips}
+            variant="contained"
+            color="error"
+            sx={{ borderRadius: 2, px: 3, fontWeight: 'bold' }}
+          >
+            Delete {selectedClipsForDeletion.size} Clip{selectedClipsForDeletion.size !== 1 ? 's' : ''}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
     </Dialog>
   );

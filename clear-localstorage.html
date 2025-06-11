@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clear localStorage Playlists</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            background-color: #ff4444;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background-color: #cc3333;
+        }
+        .info {
+            background-color: #e3f2fd;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+            border-left: 4px solid #2196f3;
+        }
+        .success {
+            background-color: #e8f5e8;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+            border-left: 4px solid #4caf50;
+        }
+        .warning {
+            background-color: #fff3e0;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+            border-left: 4px solid #ff9800;
+        }
+        pre {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Clear localStorage Shared Playlists</h1>
+        
+        <div class="info">
+            <strong>Purpose:</strong> This tool helps clear the localStorage shared playlists that were showing up on the community page.
+        </div>
+
+        <div class="warning">
+            <strong>Note:</strong> This will permanently remove all shared playlists stored in localStorage. Make sure you have them backed up if needed.
+        </div>
+
+        <h3>Current localStorage Status:</h3>
+        <div id="status"></div>
+
+        <h3>Actions:</h3>
+        <button onclick="checkLocalStorage()">Check localStorage</button>
+        <button onclick="clearSharedPlaylists()">Clear Shared Playlists</button>
+        <button onclick="clearAllLocalStorage()">Clear ALL localStorage (Nuclear Option)</button>
+
+        <h3>Console Instructions:</h3>
+        <div class="info">
+            <p>You can also use these commands in the browser console on the main app:</p>
+            <pre>
+// Check what's in localStorage
+communityDebug.checkPlaylists()
+
+// Clear localStorage playlists
+communityDebug.clearLocalStorage()
+
+// Check localStorage directly
+console.log('Shared playlists:', JSON.parse(localStorage.getItem('shared_playlists') || '[]'))
+            </pre>
+        </div>
+
+        <div id="output"></div>
+    </div>
+
+    <script>
+        function updateStatus() {
+            const statusDiv = document.getElementById('status');
+            const sharedPlaylists = localStorage.getItem('shared_playlists');
+            const playlistCount = sharedPlaylists ? JSON.parse(sharedPlaylists).length : 0;
+            
+            statusDiv.innerHTML = `
+                <div class="info">
+                    <strong>Shared Playlists in localStorage:</strong> ${playlistCount}<br>
+                    <strong>Raw data size:</strong> ${sharedPlaylists ? sharedPlaylists.length : 0} characters
+                </div>
+            `;
+        }
+
+        function checkLocalStorage() {
+            const output = document.getElementById('output');
+            const sharedPlaylists = localStorage.getItem('shared_playlists');
+            
+            if (sharedPlaylists) {
+                const playlists = JSON.parse(sharedPlaylists);
+                output.innerHTML = `
+                    <h4>Found ${playlists.length} shared playlists:</h4>
+                    <pre>${JSON.stringify(playlists, null, 2)}</pre>
+                `;
+            } else {
+                output.innerHTML = `
+                    <div class="success">
+                        <strong>No shared playlists found in localStorage!</strong>
+                    </div>
+                `;
+            }
+            updateStatus();
+        }
+
+        function clearSharedPlaylists() {
+            if (confirm('Are you sure you want to clear all shared playlists from localStorage?')) {
+                localStorage.removeItem('shared_playlists');
+                document.getElementById('output').innerHTML = `
+                    <div class="success">
+                        <strong>✅ Shared playlists cleared from localStorage!</strong>
+                    </div>
+                `;
+                updateStatus();
+            }
+        }
+
+        function clearAllLocalStorage() {
+            if (confirm('Are you sure you want to clear ALL localStorage? This will remove all app data!')) {
+                localStorage.clear();
+                document.getElementById('output').innerHTML = `
+                    <div class="success">
+                        <strong>✅ All localStorage cleared!</strong>
+                    </div>
+                `;
+                updateStatus();
+            }
+        }
+
+        // Initialize
+        updateStatus();
+    </script>
+</body>
+</html>

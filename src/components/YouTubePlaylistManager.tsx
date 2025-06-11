@@ -137,7 +137,9 @@ const YouTubePlaylistManager: React.FC<YouTubePlaylistManagerProps> = ({
 
   const handleSharingSuccess = (sharedPlaylist: SharedPlaylist) => {
     console.log('Playlist shared successfully:', sharedPlaylist.shareCode);
-    // You might want to show a success snackbar here
+
+    // Notify other components that a playlist was shared
+    window.dispatchEvent(new CustomEvent('playlistShared', { detail: sharedPlaylist }));
   };
 
   const handleSharingClose = () => {
@@ -290,9 +292,12 @@ const YouTubePlaylistManager: React.FC<YouTubePlaylistManagerProps> = ({
               <List>
                 {selectedPlaylist.clips.map((clip, index) => {
                   const isHighlighted = editContext && editContext.clipIndex === index;
+                  // Ensure unique key by combining clip.id with index
+                  const uniqueKey = clip.id ? `${clip.id}-${index}` : `clip-${index}-${selectedPlaylist.id}`;
+
                   return (
                     <ListItem
-                      key={clip.id}
+                      key={uniqueKey}
                       divider
                       sx={{
                         bgcolor: isHighlighted ? 'primary.main' : 'transparent',

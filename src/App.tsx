@@ -10,6 +10,12 @@ import YouTube from './components/YouTube';
 import YouTubeV2 from './components/YouTubeV2';
 import YouTubePlaylistPlayer from './components/YouTubePlaylistPlayer';
 import SharedPlaylists from './components/SharedPlaylists';
+import ModernNavigation, { authAwareTabs } from './components/ModernNavigation';
+import { AuthProvider, useAuth, useAuthStatus } from './contexts/AuthContext';
+import { OnboardingFlow } from './components/auth';
+import { CollaborationNotifications } from './components/playlist';
+import { UpdateManager } from './components/UpdateManager';
+import DebugPage from './pages/DebugPage';
 import {
   CssBaseline,
   AppBar,
@@ -17,18 +23,9 @@ import {
   IconButton,
   Button,
   Box,
-  Tabs,
-  Tab,
-  Tooltip,
 } from '@mui/material';
-import Brightness4Icon from '@mui/icons-material/Brightness4';
-import Brightness7Icon from '@mui/icons-material/Brightness7';
 import MusicNoteIcon from '@mui/icons-material/MusicNote';
-import QueueMusicIcon from '@mui/icons-material/QueueMusic';
-import EqualizerIcon from '@mui/icons-material/Equalizer';
 import SettingsIcon from '@mui/icons-material/Settings';
-import YouTubeIcon from '@mui/icons-material/YouTube';
-import ShareIcon from '@mui/icons-material/Share';
 import React, { createContext, useContext } from 'react';
 import Snackbar from '@mui/material/Snackbar';
 import MuiAlert from '@mui/material/Alert';
@@ -37,6 +34,11 @@ import { AudioProvider, useAudio } from './contexts/AudioContext';
 import { VisualizerProvider } from './contexts/VisualizerContext';
 import { LibraryProvider, useLibrary } from './contexts/LibraryContext';
 import ErrorBoundary from './components/ErrorBoundary';
+import './utils/ratingSystemTest'; // Import test for browser console access
+import './utils/adminSetup'; // Load admin debug tools
+import './utils/sessionDemo'; // Load session demo for testing
+import './utils/sessionPersistenceTest'; // Load session persistence tests
+import './utils/collaborationTest'; // Load collaboration debug tools
 
 // Snackbar context
 const SnackbarContext = createContext<(msg: string, severity?: 'success' | 'info' | 'warning' | 'error') => void>(() => {});
@@ -46,36 +48,57 @@ function AppContent() {
   const { mode, toggleMode } = useThemeContext();
   const audio = useAudio();
   const library = useLibrary();
+  const { status: authStatus } = useAuth();
+  const { isAuthenticated } = useAuthStatus();
   const navigate = useNavigate();
   const location = useLocation();
-  const [currentTab, setCurrentTab] = useState(0);
+  const [currentTab, setCurrentTab] = useState('create');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+
+  // Check if user should see onboarding
+  useEffect(() => {
+    const hasSeenOnboarding = localStorage.getItem('hasSeenOnboarding');
+    const shouldShowOnboarding = !hasSeenOnboarding && authStatus !== 'loading';
+
+    if (shouldShowOnboarding) {
+      // Small delay to let the app load
+      const timer = setTimeout(() => {
+        setOnboardingOpen(true);
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [authStatus]);
 
   // Sync currentTab with route
   useEffect(() => {
     switch (location.pathname) {
       case '/':
-        setCurrentTab(0);
+        setCurrentTab('create');
         break;
       case '/playlists':
-        setCurrentTab(1);
+        setCurrentTab('playlists');
         break;
       case '/youtube':
-        setCurrentTab(2);
-        break;
-      case '/youtube-v2':
-        setCurrentTab(5);
+        setCurrentTab('youtube');
         break;
       case '/community':
-        setCurrentTab(3);
+        // Only set community tab if user is authenticated
+        if (isAuthenticated) {
+          setCurrentTab('community');
+        } else {
+          // Redirect to create tab if not authenticated
+          setCurrentTab('create');
+          navigate('/');
+        }
         break;
       case '/visualizer':
-        setCurrentTab(4);
+        setCurrentTab('visualizer');
         break;
       default:
-        setCurrentTab(0);
+        setCurrentTab('create');
     }
-  }, [location.pathname]);
+  }, [location.pathname, isAuthenticated, navigate]);
 
   // Set theme attribute on body for CSS theming
   useEffect(() => {
@@ -369,159 +392,56 @@ function AppContent() {
                   </Box>
 
                   {/* Navigation Tabs */}
-                  <Tabs
-                    value={currentTab}
-                    onChange={(_, newValue) => {
-                      if (newValue === 6) {
-                        setSettingsOpen(true);
-                        return;
-                      }
-                      setCurrentTab(newValue);
-                      switch (newValue) {
-                        case 0:
-                          navigate('/');
-                          break;
-                        case 1:
-                          navigate('/playlists');
-                          break;
-                        case 2:
-                          navigate('/youtube');
-                          break;
-                        case 3:
-                          navigate('/community');
-                          break;
-                        case 4:
-                          navigate('/visualizer');
-                          break;
-                        case 5:
-                          navigate('/youtube-v2');
-                          break;
-                      }
-                    }}
-                    sx={{
-                      ml: 1,
-                      '& .MuiTabs-indicator': {
-                        backgroundColor: 'rgba(255, 255, 255, 0.8)',
-                        height: 3,
-                        borderRadius: '3px 3px 0 0',
-                      },
-                      '& .MuiTab-root': {
-                        color: 'rgba(255, 255, 255, 0.7)',
-                        textTransform: 'none',
-                        fontSize: '1rem',
-                        fontWeight: 500,
-                        minHeight: 48,
-                        '&.Mui-selected': {
-                          color: 'white',
+                  <Box sx={{ ml: 1 }}>
+                    <ModernNavigation
+                      currentTab={currentTab}
+                      onTabChange={(newTab) => {
+                        console.log('Tab change requested:', newTab);
+                        if (newTab === 'settings') {
+                          console.log('Opening settings dialog, current settingsOpen:', settingsOpen);
+                          setSettingsOpen(true);
+                          console.log('Settings dialog should now be open');
+                          return;
+                        }
+                        setCurrentTab(newTab);
+                        switch (newTab) {
+                          case 'create':
+                            navigate('/');
+                            break;
+                          case 'playlists':
+                            navigate('/playlists');
+                            break;
+                          case 'youtube':
+                            navigate('/youtube');
+                            break;
+                          case 'community':
+                            navigate('/community');
+                            break;
+                          case 'visualizer':
+                            navigate('/visualizer');
+                            break;
+                        }
+                      }}
+                      tabs={[
+                        ...authAwareTabs,
+                        {
+                          label: 'Settings',
+                          value: 'settings',
+                          icon: <SettingsIcon />,
+                          tooltip: 'App settings and preferences',
                         },
-                        '&:hover': {
-                          color: 'white',
-                          backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                        },
-                      },
-                    }}
-                  >
-                    <Tooltip title="Create and edit your Power Hour mix" placement="bottom">
-                      <Tab
-                        label="Create Mix"
-                        value={0}
-                        icon={<MusicNoteIcon />}
-                        iconPosition="start"
-                        sx={{
-                          '& .MuiTab-iconWrapper': {
-                            marginRight: 1,
-                            marginBottom: 0,
-                          },
-                        }}
-                      />
-                    </Tooltip>
-                    <Tooltip title="Manage your saved playlists" placement="bottom">
-                      <Tab
-                        label="Playlists"
-                        value={1}
-                        icon={<QueueMusicIcon />}
-                        iconPosition="start"
-                        sx={{
-                          '& .MuiTab-iconWrapper': {
-                            marginRight: 1,
-                            marginBottom: 0,
-                          },
-                        }}
-                      />
-                    </Tooltip>
-                    <Tooltip title="Create Power Hour playlists from YouTube videos" placement="bottom">
-                      <Tab
-                        label="YouTube"
-                        value={2}
-                        icon={<YouTubeIcon />}
-                        iconPosition="start"
-                        sx={{
-                          '& .MuiTab-iconWrapper': {
-                            marginRight: 1,
-                            marginBottom: 0,
-                          },
-                        }}
-                      />
-                    </Tooltip>
-                    <Tooltip title="Discover and import community playlists" placement="bottom">
-                      <Tab
-                        label="Community"
-                        value={3}
-                        icon={<ShareIcon />}
-                        iconPosition="start"
-                        sx={{
-                          '& .MuiTab-iconWrapper': {
-                            marginRight: 1,
-                            marginBottom: 0,
-                          },
-                        }}
-                      />
-                    </Tooltip>
-                    <Tooltip title="Music visualizer and immersive experience" placement="bottom">
-                      <Tab
-                        label="Visualizer"
-                        value={4}
-                        icon={<EqualizerIcon />}
-                        iconPosition="start"
-                        sx={{
-                          '& .MuiTab-iconWrapper': {
-                            marginRight: 1,
-                            marginBottom: 0,
-                          },
-                        }}
-                      />
-                    </Tooltip>
-                    <Tooltip title="Modern YouTube search with enhanced features" placement="bottom">
-                      <Tab
-                        label="YouTube V2"
-                        value={5}
-                        icon={<YouTubeIcon />}
-                        iconPosition="start"
-                        sx={{
-                          '& .MuiTab-iconWrapper': {
-                            marginRight: 1,
-                            marginBottom: 0,
-                          },
-                        }}
-                      />
-                    </Tooltip>
-                    <Tooltip title="App settings and preferences" placement="bottom">
-                      <Tab
-                        label="Settings"
-                        value={6}
-                        icon={<SettingsIcon />}
-                        iconPosition="start"
-                        sx={{
-                          '& .MuiTab-iconWrapper': {
-                            marginRight: 1,
-                            marginBottom: 0,
-                          },
-                        }}
-                      />
-                    </Tooltip>
-                  </Tabs>
+                      ]}
+                      enableAuthenticationAwareness={true}
+                      variant="standard"
+                    />
+                  </Box>
+
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  {/* Update Manager - positioned before collaboration notifications */}
+                  <UpdateManager />
+                  {/* Collaboration Notifications - positioned before window controls */}
+                  <CollaborationNotifications />
                   <WindowControls />
                 </Box>
               </Toolbar>
@@ -560,9 +480,9 @@ function AppContent() {
                   <Route path="/" element={<SongUploader playMix={playMix} />} />
                   <Route path="/playlists" element={<Playlists onPlayMix={playMix} />} />
                   <Route path="/youtube" element={<YouTube />} />
-                  <Route path="/youtube-v2" element={<YouTubeV2 />} />
                   <Route path="/community" element={<SharedPlaylists />} />
                   <Route path="/youtube-player/:playlistId" element={<YouTubePlaylistPlayer />} />
+                  <Route path="/debug" element={<DebugPage />} />
                 </Routes>
               </Box>
             )}
@@ -679,9 +599,23 @@ function AppContent() {
             {/* Settings Dialog */}
             <Settings
               open={settingsOpen}
-              onClose={() => setSettingsOpen(false)}
+              onClose={() => {
+                console.log('Settings dialog closing');
+                setSettingsOpen(false);
+              }}
               mode={mode}
               onToggleMode={toggleMode}
+            />
+
+            {/* Onboarding Flow */}
+            <OnboardingFlow
+              open={onboardingOpen}
+              onClose={() => setOnboardingOpen(false)}
+              onComplete={() => {
+                setOnboardingOpen(false);
+                // Optional: Show a welcome message
+                // showSnackbar('Welcome to Power Hour! 🎵', 'success');
+              }}
             />
           </div>
     </>
@@ -700,23 +634,25 @@ function App() {
     <ErrorBoundary>
       <SnackbarContext.Provider value={showSnackbar}>
         <ThemeContextProvider>
-          <VisualizerProvider>
-            <AudioProvider showSnackbar={showSnackbar}>
-              <LibraryProvider showSnackbar={showSnackbar}>
-                <Router>
-                  <ErrorBoundary>
-                    <AppContent />
-                  </ErrorBoundary>
-                </Router>
-              <Snackbar open={snackbar.open} autoHideDuration={4000} onClose={handleSnackbarClose} anchorOrigin={{ vertical: 'top', horizontal: 'center' }}>
-                <MuiAlert elevation={6} variant="filled" onClose={handleSnackbarClose} severity={snackbar.severity} sx={{ width: '100%' }}>
-                  {snackbar.message}
-                </MuiAlert>
-              </Snackbar>
-            </LibraryProvider>
-          </AudioProvider>
-        </VisualizerProvider>
-      </ThemeContextProvider>
+          <AuthProvider>
+            <VisualizerProvider>
+              <AudioProvider showSnackbar={showSnackbar}>
+                <LibraryProvider showSnackbar={showSnackbar}>
+                  <Router>
+                    <ErrorBoundary>
+                      <AppContent />
+                    </ErrorBoundary>
+                  </Router>
+                <Snackbar open={snackbar.open} autoHideDuration={4000} onClose={handleSnackbarClose} anchorOrigin={{ vertical: 'top', horizontal: 'center' }}>
+                  <MuiAlert elevation={6} variant="filled" onClose={handleSnackbarClose} severity={snackbar.severity} sx={{ width: '100%' }}>
+                    {snackbar.message}
+                  </MuiAlert>
+                </Snackbar>
+              </LibraryProvider>
+            </AudioProvider>
+          </VisualizerProvider>
+          </AuthProvider>
+        </ThemeContextProvider>
       </SnackbarContext.Provider>
     </ErrorBoundary>
   );

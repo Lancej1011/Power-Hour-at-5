@@ -236,20 +236,26 @@ export class FirebasePlaylistService {
 
         case 'new':
         default:
-          // Simple query for all public playlists
+          // Query for all public playlists ordered by creation date (newest first)
           q = query(
             collection(db!, COLLECTIONS.SHARED_PLAYLISTS),
             where('isPublic', '==', true),
+            orderBy('createdAt', 'desc'),
             limit(limitCount)
           );
       }
       
       const snapshot = await getDocs(q);
-      const playlists = snapshot.docs.map(doc => ({ 
-        id: doc.id, 
-        ...doc.data() 
-      } as SharedPlaylist));
-      
+      const playlists = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          ...data,
+          id: doc.id, // Always use Firebase document ID as the primary ID
+          firebaseId: doc.id, // Keep track of Firebase ID separately
+          originalPlaylistId: data.originalPlaylistId || data.id // Preserve original playlist ID
+        } as SharedPlaylist;
+      });
+
       console.log(`✅ Loaded ${playlists.length} playlists for category: ${category}`);
       return playlists;
     } catch (error) {
@@ -469,10 +475,15 @@ export class FirebasePlaylistService {
       );
 
       const snapshot = await getDocs(q);
-      const playlists = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as SharedPlaylist));
+      const playlists = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          ...data,
+          id: doc.id, // Always use Firebase document ID as the primary ID
+          firebaseId: doc.id, // Keep track of Firebase ID separately
+          originalPlaylistId: data.originalPlaylistId || data.id // Preserve original playlist ID
+        } as SharedPlaylist;
+      });
 
       console.log(`✅ Loaded ${playlists.length} user playlists`);
       return playlists;
@@ -546,12 +557,31 @@ export class FirebasePlaylistService {
         currentUserId: currentUser.uid
       });
 
-      // First verify the user owns this playlist
-      const playlistRef = doc(db!, COLLECTIONS.SHARED_PLAYLISTS, playlistId);
-      const playlistDoc = await getDoc(playlistRef);
+      // First try to find the playlist by Firebase document ID
+      let playlistRef = doc(db!, COLLECTIONS.SHARED_PLAYLISTS, playlistId);
+      let playlistDoc = await getDoc(playlistRef);
+
+      // If not found by document ID, try to find by originalPlaylistId
+      if (!playlistDoc.exists()) {
+        console.log('🔍 Playlist not found by document ID, searching by originalPlaylistId...');
+        const q = query(
+          collection(db!, COLLECTIONS.SHARED_PLAYLISTS),
+          where('originalPlaylistId', '==', playlistId),
+          where('creatorId', '==', currentUser.uid)
+        );
+
+        const snapshot = await getDocs(q);
+        if (!snapshot.empty) {
+          const doc = snapshot.docs[0];
+          playlistRef = doc.ref;
+          playlistDoc = doc;
+          console.log('✅ Found playlist by originalPlaylistId:', doc.id);
+        }
+      }
 
       if (!playlistDoc.exists()) {
         console.error('❌ Playlist not found in Firebase:', playlistId);
+        console.log('🔍 Tried both document ID and originalPlaylistId search');
         return false;
       }
 
@@ -567,12 +597,17 @@ export class FirebasePlaylistService {
         return false;
       }
 
+      // Use the actual Firebase document ID for deleting associated data
+      const actualPlaylistId = playlistRef.id;
+      console.log('🔍 Using playlist ID for deletion:', actualPlaylistId);
+
       // Delete associated ratings
       const ratingsQuery = query(
         collection(db!, COLLECTIONS.PLAYLIST_RATINGS),
-        where('playlistId', '==', playlistId)
+        where('playlistId', '==', actualPlaylistId)
       );
       const ratingsSnapshot = await getDocs(ratingsQuery);
+      console.log(`🔍 Found ${ratingsSnapshot.docs.length} ratings to delete`);
       for (const ratingDoc of ratingsSnapshot.docs) {
         await deleteDoc(ratingDoc.ref);
       }
@@ -580,9 +615,10 @@ export class FirebasePlaylistService {
       // Delete associated downloads
       const downloadsQuery = query(
         collection(db!, COLLECTIONS.PLAYLIST_DOWNLOADS),
-        where('playlistId', '==', playlistId)
+        where('playlistId', '==', actualPlaylistId)
       );
       const downloadsSnapshot = await getDocs(downloadsQuery);
+      console.log(`🔍 Found ${downloadsSnapshot.docs.length} downloads to delete`);
       for (const downloadDoc of downloadsSnapshot.docs) {
         await deleteDoc(downloadDoc.ref);
       }
@@ -670,9 +706,27 @@ export class FirebasePlaylistService {
     }
 
     try {
-      // First verify the user owns this playlist
-      const playlistRef = doc(db!, COLLECTIONS.SHARED_PLAYLISTS, playlistId);
-      const playlistDoc = await getDoc(playlistRef);
+      // First try to find the playlist by Firebase document ID
+      let playlistRef = doc(db!, COLLECTIONS.SHARED_PLAYLISTS, playlistId);
+      let playlistDoc = await getDoc(playlistRef);
+
+      // If not found by document ID, try to find by originalPlaylistId
+      if (!playlistDoc.exists()) {
+        console.log('🔍 Playlist not found by document ID, searching by originalPlaylistId...');
+        const q = query(
+          collection(db!, COLLECTIONS.SHARED_PLAYLISTS),
+          where('originalPlaylistId', '==', playlistId),
+          where('creatorId', '==', currentUser.uid)
+        );
+
+        const snapshot = await getDocs(q);
+        if (!snapshot.empty) {
+          const doc = snapshot.docs[0];
+          playlistRef = doc.ref;
+          playlistDoc = doc;
+          console.log('✅ Found playlist by originalPlaylistId:', doc.id);
+        }
+      }
 
       if (!playlistDoc.exists()) {
         console.error('Playlist not found');
@@ -696,6 +750,52 @@ export class FirebasePlaylistService {
     } catch (error) {
       console.error('❌ Error removing playlist from community:', error);
       return false;
+    }
+  }
+
+  // Debug method to find playlist by any ID
+  public async findPlaylistByAnyId(playlistId: string): Promise<SharedPlaylist | null> {
+    if (!this.isAvailable()) {
+      return null;
+    }
+
+    try {
+      // First try by document ID
+      const playlistRef = doc(db!, COLLECTIONS.SHARED_PLAYLISTS, playlistId);
+      const playlistDoc = await getDoc(playlistRef);
+
+      if (playlistDoc.exists()) {
+        const data = playlistDoc.data();
+        return {
+          ...data,
+          id: playlistDoc.id,
+          firebaseId: playlistDoc.id,
+          originalPlaylistId: data.originalPlaylistId || data.id
+        } as SharedPlaylist;
+      }
+
+      // Try by originalPlaylistId
+      const q = query(
+        collection(db!, COLLECTIONS.SHARED_PLAYLISTS),
+        where('originalPlaylistId', '==', playlistId)
+      );
+
+      const snapshot = await getDocs(q);
+      if (!snapshot.empty) {
+        const doc = snapshot.docs[0];
+        const data = doc.data();
+        return {
+          ...data,
+          id: doc.id,
+          firebaseId: doc.id,
+          originalPlaylistId: data.originalPlaylistId || data.id
+        } as SharedPlaylist;
+      }
+
+      return null;
+    } catch (error) {
+      console.error('❌ Error finding playlist by any ID:', error);
+      return null;
     }
   }
 }

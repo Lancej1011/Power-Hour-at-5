@@ -314,9 +314,10 @@ export const LibraryProvider: React.FC<LibraryProviderProps> = ({ children, show
       console.log(`LibraryContext: Total songs loaded from all libraries: ${allSongs.length}`);
       setLibrarySongs(allSongs);
 
-      if (allSongs.length > 0) {
-        showSnackbar?.(`Loaded ${allSongs.length} songs from ${allLibraries.length} libraries`, 'success');
-      }
+      // Startup notification removed - library loads silently
+      // if (allSongs.length > 0) {
+      //   showSnackbar?.(`Loaded ${allSongs.length} songs from ${allLibraries.length} libraries`, 'success');
+      // }
 
     } catch (error) {
       console.error('Error loading library songs:', error);
@@ -368,7 +369,8 @@ export const LibraryProvider: React.FC<LibraryProviderProps> = ({ children, show
       console.log('LibraryContext: Saved library to cache');
 
       setLibrarySongs(files);
-      showSnackbar?.(`Loaded ${files.length} songs from library`, 'success');
+      // Startup notification removed - library loads silently
+      // showSnackbar?.(`Loaded ${files.length} songs from library`, 'success');
     } finally {
       // Clean up progress listener
       window.electronAPI.removeLibraryLoadProgressListener(handleProgress);

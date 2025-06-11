@@ -1,4 +1,6 @@
-import { PlaylistRating, getUserProfile, getSharedPlaylists, saveSharedPlaylist } from './sharedPlaylistUtils';
+import { PlaylistRating, getUserProfile, getSharedPlaylists, saveSharedPlaylist, getSharedPlaylistsLocal, saveSharedPlaylistLocal } from './sharedPlaylistUtils';
+import { firebasePlaylistService } from '../services/firebasePlaylistService';
+import { authService } from '../services/authService';
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -57,21 +59,74 @@ const saveDownloads = (downloads: PlaylistDownload[]): boolean => {
   }
 };
 
-// Rate a playlist
-export const ratePlaylist = (
+// Rate a playlist with authentication checks (only full account users can rate)
+export const ratePlaylist = async (
   playlistId: string,
   rating: number,
   review?: string
-): boolean => {
+): Promise<boolean> => {
   if (rating < 1 || rating > 5) {
     console.error('Rating must be between 1 and 5');
     return false;
   }
 
+  // Check if user is authenticated and has a full account (not anonymous)
+  if (!authService.isAuthenticated()) {
+    console.warn('❌ User must be signed in to rate playlists');
+    return false;
+  }
+
+  const currentUser = authService.getCurrentUser();
+  if (!currentUser) {
+    console.warn('❌ No authenticated user found');
+    return false;
+  }
+
+  if (currentUser.isAnonymous) {
+    console.warn('❌ Anonymous users cannot rate playlists. Please create a full account.');
+    return false;
+  }
+
   try {
+    // Try Firebase first if available (for authenticated full account users)
+    if (firebasePlaylistService.isAvailable()) {
+      try {
+        const firebaseSuccess = await firebasePlaylistService.ratePlaylist(playlistId, rating, review);
+        if (firebaseSuccess) {
+          console.log(`✅ Successfully rated playlist ${playlistId} with ${rating} stars via Firebase`);
+
+          // Also save to localStorage for offline access
+          const userProfile = getUserProfile();
+          const allRatings = getAllRatings();
+
+          // Remove existing rating from this user for this playlist
+          const filteredRatings = allRatings.filter(
+            r => !(r.playlistId === playlistId && r.userId === userProfile.id)
+          );
+
+          // Add new rating
+          const newRating: PlaylistRating = {
+            playlistId,
+            userId: userProfile.id,
+            rating,
+            review,
+            createdAt: new Date().toISOString()
+          };
+
+          filteredRatings.push(newRating);
+          saveRatings(filteredRatings);
+
+          return true;
+        }
+      } catch (firebaseError) {
+        console.warn('⚠️ Firebase rating failed, falling back to localStorage:', firebaseError);
+      }
+    }
+
+    // Fallback to localStorage only (still requires full account)
     const userProfile = getUserProfile();
     const allRatings = getAllRatings();
-    
+
     // Remove existing rating from this user for this playlist
     const filteredRatings = allRatings.filter(
       r => !(r.playlistId === playlistId && r.userId === userProfile.id)
@@ -87,16 +142,16 @@ export const ratePlaylist = (
     };
 
     filteredRatings.push(newRating);
-    
-    // Save ratings
+
+    // Save ratings to localStorage
     if (!saveRatings(filteredRatings)) {
       return false;
     }
 
-    // Update playlist's average rating
-    updatePlaylistRating(playlistId);
-    
-    console.log(`✅ Successfully rated playlist ${playlistId} with ${rating} stars`);
+    // Update local playlist rating only
+    await updateLocalPlaylistRating(playlistId);
+
+    console.log(`✅ Successfully rated playlist ${playlistId} with ${rating} stars via localStorage`);
     return true;
   } catch (error) {
     console.error('Error rating playlist:', error);
@@ -132,20 +187,27 @@ export const calculateAverageRating = (playlistId: string): number => {
   return Math.round((sum / ratings.length) * 10) / 10; // Round to 1 decimal place
 };
 
-// Update playlist's rating in shared playlists
-const updatePlaylistRating = (playlistId: string): void => {
+// Update playlist's rating in localStorage only (for local ratings)
+const updateLocalPlaylistRating = async (playlistId: string): Promise<void> => {
   try {
-    const sharedPlaylists = getSharedPlaylists();
-    const playlist = sharedPlaylists.find(p => p.id === playlistId);
-    
-    if (playlist) {
-      playlist.rating = calculateAverageRating(playlistId);
-      playlist.updatedAt = new Date().toISOString();
-      saveSharedPlaylist(playlist);
+    const localPlaylists = getSharedPlaylistsLocal();
+    const localPlaylist = localPlaylists.find(p => p.id === playlistId);
+
+    if (localPlaylist) {
+      localPlaylist.rating = calculateAverageRating(playlistId);
+      localPlaylist.updatedAt = new Date().toISOString();
+      saveSharedPlaylistLocal(localPlaylist);
+      console.log('✅ Updated playlist rating in localStorage');
     }
   } catch (error) {
-    console.error('Error updating playlist rating:', error);
+    console.error('Error updating local playlist rating:', error);
   }
+};
+
+// Update playlist's rating in shared playlists (deprecated - use Firebase directly)
+const updatePlaylistRating = async (playlistId: string): Promise<void> => {
+  console.warn('⚠️ updatePlaylistRating is deprecated. Use Firebase ratePlaylist method directly.');
+  await updateLocalPlaylistRating(playlistId);
 };
 
 // Record a playlist download
@@ -179,7 +241,9 @@ export const recordPlaylistDownload = (playlistId: string): boolean => {
     }
 
     // Update playlist's download count
-    updatePlaylistDownloadCount(playlistId);
+    updatePlaylistDownloadCount(playlistId).catch(error => {
+      console.error('Failed to update playlist download count:', error);
+    });
     
     console.log(`✅ Successfully recorded download for playlist ${playlistId}`);
     return true;
@@ -206,15 +270,32 @@ export const getPlaylistDownloadCount = (playlistId: string): number => {
 };
 
 // Update playlist's download count in shared playlists
-const updatePlaylistDownloadCount = (playlistId: string): void => {
+const updatePlaylistDownloadCount = async (playlistId: string): Promise<void> => {
   try {
-    const sharedPlaylists = getSharedPlaylists();
-    const playlist = sharedPlaylists.find(p => p.id === playlistId);
-    
-    if (playlist) {
-      playlist.downloadCount = getPlaylistDownloadCount(playlistId);
-      playlist.updatedAt = new Date().toISOString();
-      saveSharedPlaylist(playlist);
+    // First try to update in localStorage (immediate)
+    const localPlaylists = getSharedPlaylistsLocal();
+    const localPlaylist = localPlaylists.find(p => p.id === playlistId);
+
+    if (localPlaylist) {
+      localPlaylist.downloadCount = getPlaylistDownloadCount(playlistId);
+      localPlaylist.updatedAt = new Date().toISOString();
+      saveSharedPlaylistLocal(localPlaylist);
+      console.log('✅ Updated playlist download count in localStorage');
+    }
+
+    // Also try to update in Firebase if available
+    try {
+      const hybridPlaylists = await getSharedPlaylists();
+      const hybridPlaylist = hybridPlaylists.find(p => p.id === playlistId);
+
+      if (hybridPlaylist) {
+        hybridPlaylist.downloadCount = getPlaylistDownloadCount(playlistId);
+        hybridPlaylist.updatedAt = new Date().toISOString();
+        await saveSharedPlaylist(hybridPlaylist);
+        console.log('✅ Updated playlist download count in hybrid storage');
+      }
+    } catch (hybridError) {
+      console.warn('⚠️ Failed to update download count in hybrid storage, but localStorage update succeeded:', hybridError);
     }
   } catch (error) {
     console.error('Error updating playlist download count:', error);
@@ -242,11 +323,23 @@ export const getUserRatedPlaylists = (): string[] => {
 };
 
 // Delete a rating
-export const deleteRating = (playlistId: string): boolean => {
+export const deleteRating = async (playlistId: string): Promise<boolean> => {
   try {
+    // Try Firebase first if available
+    if (firebasePlaylistService.isAvailable() && authService.isAuthenticated()) {
+      try {
+        // Firebase doesn't have a direct delete rating method, so we rate with 0 (which should remove it)
+        // For now, we'll just handle local deletion
+        console.warn('⚠️ Firebase rating deletion not implemented yet');
+      } catch (firebaseError) {
+        console.warn('⚠️ Firebase rating deletion failed:', firebaseError);
+      }
+    }
+
+    // Handle local deletion
     const userProfile = getUserProfile();
     const allRatings = getAllRatings();
-    
+
     const filteredRatings = allRatings.filter(
       r => !(r.playlistId === playlistId && r.userId === userProfile.id)
     );
@@ -255,9 +348,9 @@ export const deleteRating = (playlistId: string): boolean => {
       return false;
     }
 
-    // Update playlist's average rating
-    updatePlaylistRating(playlistId);
-    
+    // Update local playlist's average rating
+    await updateLocalPlaylistRating(playlistId);
+
     console.log(`✅ Successfully deleted rating for playlist ${playlistId}`);
     return true;
   } catch (error) {

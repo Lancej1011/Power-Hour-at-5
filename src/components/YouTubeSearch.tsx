@@ -39,6 +39,10 @@ import {
   ListItem,
   ListItemText,
   ListItemSecondaryAction,
+  alpha,
+  useTheme,
+  Snackbar,
+  Alert as MuiAlert,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -68,6 +72,9 @@ import {
   Stop as StopIcon,
   Pause as PauseIcon,
   Casino as CasinoIcon,
+  QueueMusic as QueueMusicIcon,
+  Save as SaveIcon,
+  CheckCircle as CheckCircleIcon,
 } from '@mui/icons-material';
 import { useThemeContext } from '../contexts/ThemeContext';
 import {
@@ -80,6 +87,7 @@ import {
   searchYouTubeVideos,
   searchYouTubeChannels,
   getChannelVideos,
+  getPlaylistVideos,
   createClipFromVideo,
   parseDuration,
   formatTime,
@@ -92,6 +100,7 @@ import {
   formatPublishDate,
   searchYouTubeEnhanced,
 } from '../utils/youtubeUtils';
+import { useCollaborationStore } from '../stores/collaborationStore';
 
 
 interface YouTubeSearchProps {
@@ -99,15 +108,19 @@ interface YouTubeSearchProps {
   onPlaylistUpdated?: (playlist: YouTubePlaylist) => void;
   specificClipToEdit?: {clip: any; index: number} | null;
   onSpecificClipEditComplete?: () => void;
+  onEditingPlaylistChanged?: (playlist: YouTubePlaylist) => void;
 }
 
 const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
   editingPlaylist,
   onPlaylistUpdated,
   specificClipToEdit,
-  onSpecificClipEditComplete
+  onSpecificClipEditComplete,
+  onEditingPlaylistChanged
 }) => {
+  const theme = useTheme();
   const { currentTheme } = useThemeContext();
+  const { updateCollaborativePlaylistMetadata } = useCollaborationStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<YouTubeVideo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -149,6 +162,9 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [isEditingMode, setIsEditingMode] = useState(false);
   const [originalPlaylistId, setOriginalPlaylistId] = useState<string | null>(null);
+  const [quickSaveSuccess, setQuickSaveSuccess] = useState(false);
+  const [snackbarOpen, setSnackbarOpen] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState('');
   const [previewVideoId, setPreviewVideoId] = useState<string | null>(null);
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
   const youtubePlayerRef = useRef<any>(null);
@@ -163,8 +179,29 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
   const [videoTimeConfigs, setVideoTimeConfigs] = useState<{[videoId: string]: {startTime: number, duration: number}}>({});
   const [bulkProcessing, setBulkProcessing] = useState(false);
 
+  // Sequential manual extraction state
+  const [sequentialExtractionActive, setSequentialExtractionActive] = useState(false);
+  const [sequentialVideos, setSequentialVideos] = useState<YouTubeVideo[]>([]);
+  const [currentSequentialIndex, setCurrentSequentialIndex] = useState(0);
+  const [sequentialClips, setSequentialClips] = useState<YouTubeClip[]>([]);
+
   // Enhanced search options
   const [unlimitedSearch, setUnlimitedSearch] = useState(true); // Enable unlimited search by default
+
+  // Direct link input state
+  const [inputMode, setInputMode] = useState<'search' | 'video' | 'playlist'>('search');
+  const [directVideoUrl, setDirectVideoUrl] = useState('');
+  const [directPlaylistUrl, setDirectPlaylistUrl] = useState('');
+  const [linkProcessing, setLinkProcessing] = useState(false);
+  const [playlistImportProgress, setPlaylistImportProgress] = useState<{
+    isImporting: boolean;
+    videosFound: number;
+    currentStatus: string;
+  }>({
+    isImporting: false,
+    videosFound: 0,
+    currentStatus: ''
+  });
 
   // Initialize editing mode when editingPlaylist is provided
   useEffect(() => {
@@ -174,11 +211,14 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
       setCurrentPlaylist([...editingPlaylist.clips]);
       setPlaylistName(editingPlaylist.name);
       console.log('🎬 Editing mode initialized for playlist:', editingPlaylist.name);
+      console.log('🎬 Playlist clips:', editingPlaylist.clips.length);
+      console.log('🎬 isEditingMode set to:', true);
     } else {
       setIsEditingMode(false);
       setOriginalPlaylistId(null);
       setCurrentPlaylist([]);
       setPlaylistName('');
+      console.log('🎬 Editing mode disabled - no editingPlaylist provided');
     }
   }, [editingPlaylist]);
 
@@ -235,16 +275,22 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
 
   // Debug logging for state changes
   useEffect(() => {
-    console.log('🔍 STATE DEBUG:');
+    console.log('🔍 YouTubeSearch STATE DEBUG:');
     console.log('selectedChannel:', selectedChannel);
     console.log('channelVideos.length:', channelVideos.length);
     console.log('searchResults.length:', searchResults.length);
     console.log('loading:', loading);
     console.log('isEditingMode:', isEditingMode);
+    console.log('editingPlaylist:', editingPlaylist);
+    console.log('originalPlaylistId:', originalPlaylistId);
+    console.log('currentPlaylist.length:', currentPlaylist.length);
+    console.log('playlistName:', playlistName);
     console.log('specificClipToEdit:', specificClipToEdit);
     console.log('clipDialogOpen:', clipDialogOpen);
     console.log('Show video section condition:', (searchResults.length > 0 || channelVideos.length > 0 || selectedChannel));
-  }, [selectedChannel, channelVideos, searchResults, loading, isEditingMode, specificClipToEdit, clipDialogOpen]);
+    console.log('Show playlist section condition:', (currentPlaylist.length > 0 || isEditingMode));
+    console.log('Should show quick save button:', isEditingMode);
+  }, [selectedChannel, channelVideos, searchResults, loading, isEditingMode, editingPlaylist, originalPlaylistId, currentPlaylist, playlistName, specificClipToEdit, clipDialogOpen]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -257,6 +303,29 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
 
   // Add state for error handling
   const [searchError, setSearchError] = useState<string | null>(null);
+
+  // Utility functions for YouTube URL parsing
+  const extractVideoIdFromUrl = (url: string): string | null => {
+    const patterns = [
+      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/)([^&\n?#]+)/,
+      /youtube\.com\/watch\?.*v=([^&\n?#]+)/
+    ];
+
+    for (const pattern of patterns) {
+      const match = url.match(pattern);
+      if (match) return match[1];
+    }
+    return null;
+  };
+
+  const extractPlaylistIdFromUrl = (url: string): string | null => {
+    const match = url.match(/[?&]list=([^&\n?#]+)/);
+    return match ? match[1] : null;
+  };
+
+  const isValidYouTubeUrl = (url: string): boolean => {
+    return /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)/.test(url);
+  };
 
   const handleSearch = useCallback(async (pageToken?: string, resetPage: boolean = true) => {
     if (!searchQuery.trim()) return;
@@ -427,6 +496,163 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
     handleSearch(undefined, true);
   };
 
+  // Handle direct video URL input
+  const handleDirectVideoUrl = async () => {
+    if (!directVideoUrl.trim()) return;
+
+    setLinkProcessing(true);
+    setSearchError(null);
+
+    try {
+      if (!isValidYouTubeUrl(directVideoUrl)) {
+        throw new Error('Please enter a valid YouTube URL');
+      }
+
+      const videoId = extractVideoIdFromUrl(directVideoUrl);
+      if (!videoId) {
+        throw new Error('Could not extract video ID from URL');
+      }
+
+      // Try to get video details using yt-dlp if available
+      let videoDetails: YouTubeVideo;
+
+      try {
+        // Attempt to get real video details
+        const searchResult = await searchYouTubeEnhanced(`https://www.youtube.com/watch?v=${videoId}`, null, {
+          maxResults: 1,
+          useYtDlp: true
+        });
+
+        if (searchResult.videos.length > 0) {
+          videoDetails = searchResult.videos[0];
+          console.log('✅ Retrieved video details via yt-dlp:', videoDetails.title);
+        } else {
+          throw new Error('No video details found');
+        }
+      } catch (detailsError) {
+        console.log('⚠️ Could not get video details, using basic info:', detailsError.message);
+
+        // Fallback to basic video object
+        videoDetails = {
+          id: videoId,
+          title: `YouTube Video (${videoId})`,
+          channelTitle: 'Unknown Channel',
+          thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
+          duration: 'PT0S',
+          publishedAt: '',
+          viewCount: '',
+          description: 'Video added via direct URL'
+        };
+      }
+
+      // Add to search results
+      setSearchResults([videoDetails]);
+      setSearchResult({
+        videos: [videoDetails],
+        totalResults: 1,
+        nextPageToken: null,
+        prevPageToken: null
+      });
+
+      // Clear the input
+      setDirectVideoUrl('');
+
+      console.log('✅ Direct video URL processed:', videoId);
+    } catch (error) {
+      console.error('❌ Failed to process video URL:', error);
+      setSearchError(error.message || 'Failed to process video URL');
+    } finally {
+      setLinkProcessing(false);
+    }
+  };
+
+  // Handle direct playlist URL input
+  const handleDirectPlaylistUrl = async () => {
+    if (!directPlaylistUrl.trim()) return;
+
+    setLinkProcessing(true);
+    setSearchError(null);
+    setPlaylistImportProgress({
+      isImporting: true,
+      videosFound: 0,
+      currentStatus: 'Validating playlist URL...'
+    });
+
+    try {
+      if (!isValidYouTubeUrl(directPlaylistUrl)) {
+        throw new Error('Please enter a valid YouTube playlist URL');
+      }
+
+      const playlistId = extractPlaylistIdFromUrl(directPlaylistUrl);
+      if (!playlistId) {
+        throw new Error('Could not extract playlist ID from URL. Make sure the URL contains "list=" parameter');
+      }
+
+      setPlaylistImportProgress(prev => ({
+        ...prev,
+        currentStatus: 'Extracting playlist videos...'
+      }));
+
+      console.log('🎵 Extracting playlist videos:', playlistId);
+
+      // Use the new playlist extraction functionality
+      const playlistResult = await getPlaylistVideos(playlistId, null, {
+        maxResults: Math.min(resultsPerPage * 3, 100) // Get more videos for playlists
+      });
+
+      if (playlistResult.videos.length === 0) {
+        throw new Error('No videos found in playlist. The playlist may be empty or private.');
+      }
+
+      setPlaylistImportProgress(prev => ({
+        ...prev,
+        videosFound: playlistResult.videos.length,
+        currentStatus: `Processing ${playlistResult.videos.length} videos...`
+      }));
+
+      // Add playlist videos to search results
+      setSearchResults(playlistResult.videos);
+      setSearchResult(playlistResult);
+
+      // Clear channel results since we're showing playlist videos
+      setChannelResults([]);
+      setChannelPagination(null);
+      setSelectedChannel(null);
+      setChannelVideos([]);
+      setChannelVideoResult(null);
+
+      // Clear the input
+      setDirectPlaylistUrl('');
+
+      setPlaylistImportProgress(prev => ({
+        ...prev,
+        currentStatus: `✅ Successfully imported ${playlistResult.videos.length} videos!`
+      }));
+
+      // Clear progress after a delay
+      setTimeout(() => {
+        setPlaylistImportProgress({
+          isImporting: false,
+          videosFound: 0,
+          currentStatus: ''
+        });
+      }, 3000);
+
+      console.log(`✅ Successfully imported ${playlistResult.videos.length} videos from playlist`);
+
+    } catch (error) {
+      console.error('❌ Failed to process playlist URL:', error);
+      setSearchError(error.message || 'Failed to process playlist URL');
+      setPlaylistImportProgress({
+        isImporting: false,
+        videosFound: 0,
+        currentStatus: ''
+      });
+    } finally {
+      setLinkProcessing(false);
+    }
+  };
+
   const handlePlayVideo = (video: YouTubeVideo, startTime: number = 0) => {
     setPlayingVideoId(video.id);
     setPlaybackStartTime(startTime);
@@ -562,6 +788,12 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
   const handleClipConfirm = () => {
     if (!selectedVideo) return;
 
+    // Check if we're in sequential extraction mode
+    if (sequentialExtractionActive) {
+      handleSequentialClipConfirm();
+      return;
+    }
+
     // Check if we're editing an existing clip
     const existingClipIndex = currentPlaylist.findIndex(clip => clip.videoId === selectedVideo.id);
 
@@ -582,6 +814,12 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
     if (previewTimeoutRef.current) {
       clearTimeout(previewTimeoutRef.current);
       previewTimeoutRef.current = null;
+    }
+
+    // Check if we're in sequential extraction mode
+    if (sequentialExtractionActive) {
+      cancelSequentialExtraction();
+      return;
     }
 
     setClipDialogOpen(false);
@@ -698,6 +936,108 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
 
   const handleSaveCancel = () => {
     setSaveDialogOpen(false);
+  };
+
+  const handleQuickSave = async () => {
+    if (!isEditingMode || !editingPlaylist || !originalPlaylistId) return;
+
+    try {
+      // Check if this is a collaborative playlist
+      const isCollaborative = (editingPlaylist as any).isCollaborative || (editingPlaylist as any).collaborationId;
+
+      if (isCollaborative) {
+        console.log('🤝 Saving collaborative playlist...');
+        console.log('🤝 Original clips:', editingPlaylist.clips.length);
+        console.log('🤝 Current clips:', currentPlaylist.length);
+
+        // For collaborative playlists, we need to update the entire playlist data
+        // including both metadata and clips in a single update to avoid race conditions
+        const updateData: any = {};
+
+        // Add name if changed
+        if (playlistName.trim() && playlistName.trim() !== editingPlaylist.name) {
+          updateData.name = playlistName.trim();
+        }
+
+        // Always update clips and date
+        updateData.clips = currentPlaylist;
+        updateData.date = new Date().toISOString();
+
+        console.log('🤝 Updating collaborative playlist with data:', updateData);
+        console.log('🤝 Playlist ID:', originalPlaylistId);
+        console.log('🤝 Update data clips length:', updateData.clips?.length);
+
+        const success = await updateCollaborativePlaylistMetadata(originalPlaylistId, updateData);
+
+        if (!success) {
+          throw new Error('Failed to update collaborative playlist');
+        }
+
+        console.log('✅ Collaborative playlist saved successfully');
+        console.log('✅ Saved clips count:', updateData.clips?.length);
+
+        // Update the local editing playlist to reflect the changes
+        // This prevents the real-time listener from reverting our changes
+        const updatedEditingPlaylist = {
+          ...editingPlaylist,
+          ...updateData
+        };
+
+        // Notify parent component to update the editing playlist
+        if (onEditingPlaylistChanged) {
+          onEditingPlaylistChanged(updatedEditingPlaylist);
+        }
+
+        // Notify parent component if provided
+        if (onPlaylistUpdated) {
+          onPlaylistUpdated(updatedEditingPlaylist);
+        }
+
+      } else {
+        console.log('💾 Saving regular YouTube playlist...');
+
+        // For regular YouTube playlists, save to localStorage
+        const playlist: YouTubePlaylist = {
+          id: originalPlaylistId,
+          name: playlistName.trim() || editingPlaylist.name,
+          clips: currentPlaylist,
+          date: editingPlaylist.date,
+          // Preserve existing playlist properties
+          drinkingSoundPath: editingPlaylist.drinkingSoundPath,
+          imagePath: editingPlaylist.imagePath,
+          isPublic: editingPlaylist.isPublic,
+          shareCode: editingPlaylist.shareCode,
+          creator: editingPlaylist.creator,
+          description: editingPlaylist.description,
+          rating: editingPlaylist.rating,
+          downloadCount: editingPlaylist.downloadCount,
+          tags: editingPlaylist.tags,
+          createdAt: editingPlaylist.createdAt,
+          updatedAt: new Date().toISOString(),
+          version: editingPlaylist.version
+        };
+
+        saveYouTubePlaylist(playlist);
+
+        // Notify parent component if provided
+        if (onPlaylistUpdated) {
+          onPlaylistUpdated(playlist);
+        }
+      }
+
+      // Show success feedback
+      setQuickSaveSuccess(true);
+      setSnackbarMessage(`Playlist "${playlistName.trim() || editingPlaylist.name}" saved successfully!`);
+      setSnackbarOpen(true);
+      setTimeout(() => setQuickSaveSuccess(false), 3000);
+
+      console.log('✅ Playlist saved successfully!');
+
+    } catch (error) {
+      console.error('❌ Error saving playlist:', error);
+      setSnackbarMessage(`Failed to save playlist: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setSnackbarOpen(true);
+    }
   };
 
   const getVideoDuration = (video: YouTubeVideo): number => {
@@ -905,6 +1245,12 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
   const handleBulkConfirm = async () => {
     if (selectedVideos.length === 0) return;
 
+    // Check if manual mode should use sequential workflow
+    if (timeSelectionMode === 'manual') {
+      startSequentialExtraction();
+      return;
+    }
+
     setBulkProcessing(true);
 
     try {
@@ -925,9 +1271,6 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
               startTime: bulkStartTime,
               duration: bulkDuration
             };
-            break;
-          case 'manual':
-            timeConfigs[video.id] = videoTimeConfigs[video.id] || { startTime: 0, duration: 60 };
             break;
           default:
             timeConfigs[video.id] = { startTime: 0, duration: 60 };
@@ -957,6 +1300,106 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
     }));
   };
 
+  // Sequential extraction workflow functions
+  const startSequentialExtraction = () => {
+    if (selectedVideos.length === 0) return;
+
+    setSequentialVideos([...selectedVideos]);
+    setCurrentSequentialIndex(0);
+    setSequentialClips([]);
+    setSequentialExtractionActive(true);
+    setBulkConfigDialogOpen(false);
+
+    // Open the clip dialog for the first video
+    openClipDialogForSequentialVideo(selectedVideos[0]);
+  };
+
+  const openClipDialogForSequentialVideo = (video: YouTubeVideo) => {
+    setSelectedVideo(video);
+    setClipStartTime(0);
+    setClipDuration(60);
+    setUseCustomDuration(false);
+    setCustomDurationInput('60');
+    setPreviewVideoId(video.id);
+    setClipDialogOpen(true);
+  };
+
+  const handleSequentialClipConfirm = () => {
+    if (!selectedVideo) return;
+
+    // Create clip from current video
+    const newClip = createClipFromVideo(selectedVideo, clipStartTime, clipDuration);
+
+    // Move to next video or complete the process
+    const nextIndex = currentSequentialIndex + 1;
+
+    if (nextIndex < sequentialVideos.length) {
+      // Add current clip and move to next video
+      setSequentialClips(prev => [...prev, newClip]);
+      setCurrentSequentialIndex(nextIndex);
+      setClipDialogOpen(false);
+
+      // Small delay to ensure dialog closes before opening for next video
+      setTimeout(() => {
+        openClipDialogForSequentialVideo(sequentialVideos[nextIndex]);
+      }, 100);
+    } else {
+      // This is the last video - add the clip and complete the workflow
+      setSequentialClips(prev => {
+        const updatedClips = [...prev, newClip];
+        // Complete the workflow with the final clip included
+        setTimeout(() => {
+          completeSequentialExtractionWithClips(updatedClips);
+        }, 0);
+        return updatedClips;
+      });
+    }
+  };
+
+  const completeSequentialExtraction = () => {
+    // Add all sequential clips to the main playlist
+    setCurrentPlaylist(prev => [...prev, ...sequentialClips]);
+
+    // Reset sequential extraction state
+    setSequentialExtractionActive(false);
+    setSequentialVideos([]);
+    setCurrentSequentialIndex(0);
+    setSequentialClips([]);
+    setClipDialogOpen(false);
+    setSelectedVideo(null);
+
+    // Clear bulk selection
+    setSelectedVideos([]);
+    setVideoTimeConfigs({});
+  };
+
+  const completeSequentialExtractionWithClips = (finalClips: YouTubeClip[]) => {
+    // Add all sequential clips (including the final one) to the main playlist
+    setCurrentPlaylist(prev => [...prev, ...finalClips]);
+
+    // Reset sequential extraction state
+    setSequentialExtractionActive(false);
+    setSequentialVideos([]);
+    setCurrentSequentialIndex(0);
+    setSequentialClips([]);
+    setClipDialogOpen(false);
+    setSelectedVideo(null);
+
+    // Clear bulk selection
+    setSelectedVideos([]);
+    setVideoTimeConfigs({});
+  };
+
+  const cancelSequentialExtraction = () => {
+    // Reset all sequential extraction state
+    setSequentialExtractionActive(false);
+    setSequentialVideos([]);
+    setCurrentSequentialIndex(0);
+    setSequentialClips([]);
+    setClipDialogOpen(false);
+    setSelectedVideo(null);
+  };
+
   // Drag and drop handler for reordering clips
   const handleClipDragEnd = useCallback((result: DropResult) => {
     const { destination, source } = result;
@@ -975,48 +1418,127 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
     <Box>
       {/* Search Section */}
       <Box sx={{ mb: 4 }}>
-        {/* Search Mode Toggle */}
+        {/* Enhanced Search Header */}
         <Box sx={{ mb: 3 }}>
-          <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center' }}>
-            <SearchIcon sx={{ mr: 1 }} />
-            YouTube Search
-          </Typography>
-          <Box sx={{ display: 'flex', gap: 1, mb: 3 }}>
-            <Button
-              variant={searchMode === 'videos' ? 'contained' : 'outlined'}
-              onClick={() => setSearchMode('videos')}
-              disabled={loading}
-              sx={{
-                borderRadius: 3,
-                textTransform: 'none',
-                fontWeight: 600,
-                ...(searchMode === 'videos' && {
-                  background: `linear-gradient(135deg, ${currentTheme.primary} 0%, ${currentTheme.secondary} 100%)`,
-                })
-              }}
-            >
-              🎬 Search Videos
-            </Button>
-            <Button
-              variant={searchMode === 'channels' ? 'contained' : 'outlined'}
-              onClick={() => setSearchMode('channels')}
-              disabled={loading}
-              sx={{
-                borderRadius: 3,
-                textTransform: 'none',
-                fontWeight: 600,
-                ...(searchMode === 'channels' && {
-                  background: `linear-gradient(135deg, ${currentTheme.primary} 0%, ${currentTheme.secondary} 100%)`,
-                })
-              }}
-            >
-              📺 Search Channels
-            </Button>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+            <Typography variant="h6" sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              fontWeight: 600,
+              background: `linear-gradient(135deg, ${currentTheme.primary} 0%, ${currentTheme.secondary} 100%)`,
+              backgroundClip: 'text',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+            }}>
+              <SearchIcon sx={{ color: currentTheme.primary }} />
+              YouTube Search & Clip Creation
+            </Typography>
+
+            {/* Input Mode Toggle - Modern Design */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Chip
+                icon={<SearchIcon />}
+                label="Search"
+                color="primary"
+                variant={inputMode === 'search' ? 'filled' : 'outlined'}
+                onClick={() => setInputMode('search')}
+                clickable
+                disabled={loading || linkProcessing}
+                sx={{
+                  fontWeight: 600,
+                  transition: 'all 0.2s ease',
+                  '&:hover': {
+                    transform: 'translateY(-1px)',
+                    boxShadow: 2,
+                  }
+                }}
+              />
+              <Chip
+                icon={<PlayIcon />}
+                label="Video URL"
+                color="secondary"
+                variant={inputMode === 'video' ? 'filled' : 'outlined'}
+                onClick={() => setInputMode('video')}
+                clickable
+                disabled={loading || linkProcessing}
+                sx={{
+                  fontWeight: 600,
+                  transition: 'all 0.2s ease',
+                  '&:hover': {
+                    transform: 'translateY(-1px)',
+                    boxShadow: 2,
+                  }
+                }}
+              />
+              <Chip
+                icon={<QueueMusicIcon />}
+                label="Playlist URL"
+                color="info"
+                variant={inputMode === 'playlist' ? 'filled' : 'outlined'}
+                onClick={() => setInputMode('playlist')}
+                clickable
+                disabled={loading || linkProcessing}
+                sx={{
+                  fontWeight: 600,
+                  transition: 'all 0.2s ease',
+                  '&:hover': {
+                    transform: 'translateY(-1px)',
+                    boxShadow: 2,
+                  }
+                }}
+              />
+            </Box>
           </Box>
         </Box>
 
+        {/* Search Mode Toggle - Only show when in search input mode */}
+        {inputMode === 'search' && (
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>
+              Search Type:
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <Button
+                variant={searchMode === 'videos' ? 'contained' : 'outlined'}
+                onClick={() => setSearchMode('videos')}
+                disabled={loading}
+                size="small"
+                startIcon={<SearchIcon />}
+                sx={{
+                  borderRadius: 2,
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  ...(searchMode === 'videos' && {
+                    background: `linear-gradient(135deg, ${currentTheme.primary} 0%, ${currentTheme.secondary} 100%)`,
+                  })
+                }}
+              >
+                Search Videos
+              </Button>
+              <Button
+                variant={searchMode === 'channels' ? 'contained' : 'outlined'}
+                onClick={() => setSearchMode('channels')}
+                disabled={loading}
+                size="small"
+                startIcon={<PersonIcon />}
+                sx={{
+                  borderRadius: 2,
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  ...(searchMode === 'channels' && {
+                    background: `linear-gradient(135deg, ${currentTheme.primary} 0%, ${currentTheme.secondary} 100%)`,
+                  })
+                }}
+              >
+                Search Channels
+              </Button>
+            </Box>
+          </Box>
+        )}
+
         {/* Channel Sort Options */}
-        {searchMode === 'channels' && (
+        {inputMode === 'search' && searchMode === 'channels' && (
           <Box sx={{ mb: 3 }}>
             <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>
               Sort Channels By:
@@ -1048,54 +1570,225 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
           </Box>
         )}
 
-        {/* Search Bar */}
+        {/* Dynamic Input Bar based on mode */}
         <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
-          <TextField
-            fullWidth
-            label={searchMode === 'videos' ? 'Search Videos' : 'Search Channels'}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyPress={handleKeyPress}
-            placeholder={searchMode === 'videos' ? 'Enter song name, artist, or keywords...' : 'Enter channel name or creator...'}
-            InputProps={{
-              startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.secondary' }} />,
-            }}
-          />
-          {searchMode === 'videos' && (
-            <Button
-              variant="outlined"
-              onClick={() => setShowFilters(!showFilters)}
-              startIcon={<FilterListIcon />}
-              sx={{ minWidth: 120 }}
-            >
-              Filters
-            </Button>
+          {inputMode === 'search' && (
+            <>
+              <TextField
+                fullWidth
+                label={searchMode === 'videos' ? 'Search Videos' : 'Search Channels'}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyPress={handleKeyPress}
+                placeholder={searchMode === 'videos' ? 'Enter song name, artist, or keywords...' : 'Enter channel name or creator...'}
+                InputProps={{
+                  startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.secondary' }} />,
+                }}
+                sx={{
+                  '& .MuiOutlinedInput-root': {
+                    borderRadius: 3,
+                    transition: 'all 0.2s ease',
+                    '&:hover': {
+                      boxShadow: `0 0 0 2px ${currentTheme.primary}20`,
+                    },
+                    '&.Mui-focused': {
+                      boxShadow: `0 0 0 2px ${currentTheme.primary}40`,
+                    },
+                  },
+                }}
+              />
+              {searchMode === 'videos' && (
+                <Button
+                  variant="outlined"
+                  onClick={() => setShowFilters(!showFilters)}
+                  startIcon={<FilterListIcon />}
+                  sx={{
+                    minWidth: 120,
+                    borderRadius: 3,
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    transition: 'all 0.2s ease',
+                    '&:hover': {
+                      transform: 'translateY(-1px)',
+                      boxShadow: 2,
+                    }
+                  }}
+                >
+                  Filters
+                </Button>
+              )}
+              <Button
+                variant="contained"
+                onClick={handleNewSearch}
+                disabled={loading || !searchQuery.trim()}
+                sx={{
+                  minWidth: 120,
+                  borderRadius: 3,
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  background: `linear-gradient(135deg, ${currentTheme.primary} 0%, ${currentTheme.secondary} 100%)`,
+                  transition: 'all 0.2s ease',
+                  '&:hover': {
+                    transform: 'translateY(-1px)',
+                    boxShadow: `0 4px 12px ${currentTheme.primary}40`,
+                    background: `linear-gradient(135deg, ${currentTheme.primary} 0%, ${currentTheme.secondary} 100%)`,
+                    filter: 'brightness(1.1)',
+                  },
+                  '&:disabled': {
+                    background: 'action.disabledBackground',
+                    transform: 'none',
+                    boxShadow: 'none',
+                  }
+                }}
+              >
+                {loading ? <CircularProgress size={24} color="inherit" /> : 'Search'}
+              </Button>
+            </>
           )}
+
+          {inputMode === 'video' && (
+            <>
+              <TextField
+                fullWidth
+                label="YouTube Video URL"
+                value={directVideoUrl}
+                onChange={(e) => setDirectVideoUrl(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleDirectVideoUrl()}
+                placeholder="https://www.youtube.com/watch?v=... or https://youtu.be/..."
+                InputProps={{
+                  startAdornment: <PlayIcon sx={{ mr: 1, color: 'text.secondary' }} />,
+                }}
+                sx={{
+                  '& .MuiOutlinedInput-root': {
+                    borderRadius: 3,
+                    transition: 'all 0.2s ease',
+                    '&:hover': {
+                      boxShadow: `0 0 0 2px ${currentTheme.secondary}20`,
+                    },
+                    '&.Mui-focused': {
+                      boxShadow: `0 0 0 2px ${currentTheme.secondary}40`,
+                    },
+                  },
+                }}
+              />
+              <Button
+                variant="contained"
+                onClick={handleDirectVideoUrl}
+                disabled={linkProcessing || !directVideoUrl.trim()}
+                sx={{
+                  minWidth: 120,
+                  borderRadius: 3,
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  background: `linear-gradient(135deg, ${currentTheme.secondary} 0%, ${currentTheme.primary} 100%)`,
+                  transition: 'all 0.2s ease',
+                  '&:hover': {
+                    transform: 'translateY(-1px)',
+                    boxShadow: `0 4px 12px ${currentTheme.secondary}40`,
+                    background: `linear-gradient(135deg, ${currentTheme.secondary} 0%, ${currentTheme.primary} 100%)`,
+                    filter: 'brightness(1.1)',
+                  },
+                  '&:disabled': {
+                    background: 'action.disabledBackground',
+                    transform: 'none',
+                    boxShadow: 'none',
+                  }
+                }}
+              >
+                {linkProcessing ? <CircularProgress size={24} color="inherit" /> : 'Add Video'}
+              </Button>
+            </>
+          )}
+
+          {inputMode === 'playlist' && (
+            <>
+              <TextField
+                fullWidth
+                label="YouTube Playlist URL"
+                value={directPlaylistUrl}
+                onChange={(e) => setDirectPlaylistUrl(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleDirectPlaylistUrl()}
+                placeholder="https://www.youtube.com/playlist?list=..."
+                InputProps={{
+                  startAdornment: <QueueMusicIcon sx={{ mr: 1, color: 'text.secondary' }} />,
+                }}
+                sx={{
+                  '& .MuiOutlinedInput-root': {
+                    borderRadius: 3,
+                    transition: 'all 0.2s ease',
+                    '&:hover': {
+                      boxShadow: `0 0 0 2px #2196f320`,
+                    },
+                    '&.Mui-focused': {
+                      boxShadow: `0 0 0 2px #2196f340`,
+                    },
+                  },
+                }}
+              />
+              <Button
+                variant="contained"
+                onClick={handleDirectPlaylistUrl}
+                disabled={linkProcessing || !directPlaylistUrl.trim()}
+                sx={{
+                  minWidth: 140,
+                  borderRadius: 3,
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  background: 'linear-gradient(135deg, #2196f3 0%, #21cbf3 100%)',
+                  transition: 'all 0.2s ease',
+                  '&:hover': {
+                    transform: 'translateY(-1px)',
+                    boxShadow: '0 4px 12px #2196f340',
+                    background: 'linear-gradient(135deg, #2196f3 0%, #21cbf3 100%)',
+                    filter: 'brightness(1.1)',
+                  },
+                  '&:disabled': {
+                    background: 'action.disabledBackground',
+                    transform: 'none',
+                    boxShadow: 'none',
+                  }
+                }}
+              >
+                {linkProcessing ? (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <CircularProgress size={20} color="inherit" />
+                    <Typography variant="caption">
+                      {playlistImportProgress.videosFound > 0
+                        ? `${playlistImportProgress.videosFound} videos`
+                        : 'Processing...'
+                      }
+                    </Typography>
+                  </Box>
+                ) : 'Import Playlist'}
+              </Button>
+            </>
+          )}
+
+          {/* Size Controls - Always available */}
           <Button
             variant="outlined"
             onClick={() => setShowSizeControls(!showSizeControls)}
             startIcon={<SettingsIcon />}
-            sx={{ minWidth: 120 }}
-          >
-            Size
-          </Button>
-          <Button
-            variant="contained"
-            onClick={handleNewSearch}
-            disabled={loading || !searchQuery.trim()}
             sx={{
               minWidth: 120,
-              background: `linear-gradient(135deg, ${currentTheme.primary} 0%, ${currentTheme.secondary} 100%)`,
+              borderRadius: 3,
+              textTransform: 'none',
+              fontWeight: 600,
+              transition: 'all 0.2s ease',
+              '&:hover': {
+                transform: 'translateY(-1px)',
+                boxShadow: 2,
+              }
             }}
           >
-            {loading ? <CircularProgress size={24} /> : 'Search'}
+            Size
           </Button>
         </Box>
 
 
 
-        {/* Search Filters */}
-        {showFilters && (
+        {/* Search Filters - Only show in search mode */}
+        {inputMode === 'search' && showFilters && (
           <Box sx={{
             p: 3,
             mb: 3,
@@ -1235,6 +1928,94 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
           </Box>
         )}
 
+        {/* Playlist Import Progress */}
+        {playlistImportProgress.isImporting && (
+          <Box sx={{
+            p: 2,
+            mb: 3,
+            backgroundColor: alpha('#2196f3', 0.1),
+            borderRadius: 2,
+            border: `1px solid ${alpha('#2196f3', 0.3)}`
+          }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
+              <CircularProgress size={20} sx={{ color: '#2196f3' }} />
+              <Typography variant="body2" sx={{ fontWeight: 600, color: '#2196f3' }}>
+                Importing Playlist
+              </Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary">
+              {playlistImportProgress.currentStatus}
+            </Typography>
+            {playlistImportProgress.videosFound > 0 && (
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                Found {playlistImportProgress.videosFound} videos so far...
+              </Typography>
+            )}
+          </Box>
+        )}
+
+        {/* Help Information for different input modes */}
+        {inputMode === 'video' && (
+          <Box sx={{
+            p: 2,
+            mb: 3,
+            backgroundColor: alpha(currentTheme.secondary, 0.1),
+            borderRadius: 2,
+            border: `1px solid ${alpha(currentTheme.secondary, 0.2)}`
+          }}>
+            <Typography variant="body2" sx={{ fontWeight: 600, mb: 1, color: currentTheme.secondary }}>
+              📹 Direct Video URL
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Paste any YouTube video URL to add it directly to your search results. Supports:
+            </Typography>
+            <Box component="ul" sx={{ mt: 1, mb: 0, pl: 2 }}>
+              <Typography component="li" variant="caption" color="text.secondary">
+                youtube.com/watch?v=VIDEO_ID
+              </Typography>
+              <Typography component="li" variant="caption" color="text.secondary">
+                youtu.be/VIDEO_ID
+              </Typography>
+              <Typography component="li" variant="caption" color="text.secondary">
+                youtube.com/embed/VIDEO_ID
+              </Typography>
+            </Box>
+          </Box>
+        )}
+
+        {inputMode === 'playlist' && (
+          <Box sx={{
+            p: 2,
+            mb: 3,
+            backgroundColor: alpha('#2196f3', 0.1),
+            borderRadius: 2,
+            border: `1px solid ${alpha('#2196f3', 0.2)}`
+          }}>
+            <Typography variant="body2" sx={{ fontWeight: 600, mb: 1, color: '#2196f3' }}>
+              🎵 YouTube Playlist Import
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              Import all videos from a YouTube playlist at once using yt-dlp. Perfect for:
+            </Typography>
+            <Box component="ul" sx={{ mt: 1, mb: 1, pl: 2 }}>
+              <Typography component="li" variant="caption" color="text.secondary">
+                Music albums or compilations
+              </Typography>
+              <Typography component="li" variant="caption" color="text.secondary">
+                Curated song collections
+              </Typography>
+              <Typography component="li" variant="caption" color="text.secondary">
+                Artist discographies
+              </Typography>
+              <Typography component="li" variant="caption" color="text.secondary">
+                Live concert recordings
+              </Typography>
+            </Box>
+            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+              ✅ Supports public playlists • ⚡ Powered by yt-dlp • 📊 Up to 100 videos
+            </Typography>
+          </Box>
+        )}
 
       </Box>
 
@@ -1697,13 +2478,28 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
                     flexDirection: 'column',
                     border: isSelected ? `2px solid ${currentTheme.primary}` : '1px solid',
                     borderColor: isSelected ? currentTheme.primary : 'divider',
-                    transition: 'all 0.2s ease',
-                    boxShadow: isSelected ? `0 4px 12px ${currentTheme.primary}30` : 1,
+                    borderRadius: 3,
+                    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                    boxShadow: isSelected
+                      ? `0 8px 24px ${currentTheme.primary}30, 0 0 0 1px ${currentTheme.primary}20`
+                      : '0 2px 8px rgba(0, 0, 0, 0.1)',
+                    overflow: 'hidden',
+                    position: 'relative',
                     '&:hover': {
-                      transform: 'translateY(-2px)',
-                      boxShadow: `0 6px 16px ${currentTheme.primary}20`,
+                      transform: 'translateY(-4px)',
+                      boxShadow: `0 12px 32px ${currentTheme.primary}25, 0 0 0 1px ${currentTheme.primary}30`,
                       borderColor: currentTheme.primary,
-                    }
+                    },
+                    '&:before': isSelected ? {
+                      content: '""',
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: '4px',
+                      background: `linear-gradient(90deg, ${currentTheme.primary} 0%, ${currentTheme.secondary} 100%)`,
+                      zIndex: 1,
+                    } : {}
                   }}>
                     <Box sx={{ position: 'relative', height: dimensions.thumbnailHeight }}>
                       <CardMedia
@@ -1852,29 +2648,41 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
                           size={cardSize === 'large' ? 'medium' : 'small'}
                           sx={{
                             flex: 1,
-                            borderRadius: 1.5,
+                            borderRadius: 2,
                             textTransform: 'none',
                             fontWeight: 600,
                             fontSize: dimensions.buttonFontSize,
                             height: `${dimensions.buttonAreaHeight}px`,
-                            minWidth: 0
+                            minWidth: 0,
+                            transition: 'all 0.2s ease',
+                            '&:hover': {
+                              transform: 'translateY(-1px)',
+                              boxShadow: 2,
+                              backgroundColor: alpha(currentTheme.primary, 0.04),
+                            }
                           }}
                         >
                           Play
                         </Button>
                         <Button
                           variant="outlined"
-                          startIcon={cardSize !== 'small' ? <PlayIcon /> : undefined}
+                          startIcon={cardSize !== 'small' ? <VisibilityIcon /> : undefined}
                           onClick={() => handlePreviewVideo(video)}
                           size={cardSize === 'large' ? 'medium' : 'small'}
                           sx={{
                             flex: 1,
-                            borderRadius: 1.5,
+                            borderRadius: 2,
                             textTransform: 'none',
                             fontWeight: 600,
                             fontSize: dimensions.buttonFontSize,
                             height: `${dimensions.buttonAreaHeight}px`,
-                            minWidth: 0
+                            minWidth: 0,
+                            transition: 'all 0.2s ease',
+                            '&:hover': {
+                              transform: 'translateY(-1px)',
+                              boxShadow: 2,
+                              backgroundColor: alpha(currentTheme.secondary, 0.04),
+                            }
                           }}
                         >
                           Preview
@@ -1886,13 +2694,20 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
                           size={cardSize === 'large' ? 'medium' : 'small'}
                           sx={{
                             flex: 1,
-                            borderRadius: 1.5,
+                            borderRadius: 2,
                             textTransform: 'none',
                             fontWeight: 600,
                             fontSize: dimensions.buttonFontSize,
                             height: `${dimensions.buttonAreaHeight}px`,
                             minWidth: 0,
                             background: `linear-gradient(135deg, ${currentTheme.primary} 0%, ${currentTheme.secondary} 100%)`,
+                            transition: 'all 0.2s ease',
+                            '&:hover': {
+                              transform: 'translateY(-1px)',
+                              boxShadow: `0 4px 12px ${currentTheme.primary}40`,
+                              background: `linear-gradient(135deg, ${currentTheme.primary} 0%, ${currentTheme.secondary} 100%)`,
+                              filter: 'brightness(1.1)',
+                            }
                           }}
                         >
                           Add
@@ -1951,11 +2766,11 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
       )}
 
       {/* Current Playlist */}
-      {currentPlaylist.length > 0 && (
+      {(currentPlaylist.length > 0 || isEditingMode) && (
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
             <Typography variant="h6">
-              {isEditingMode ? `Editing: ${playlistName}` : 'Current Playlist'} ({currentPlaylist.length} clips)
+              {isEditingMode ? `Editing: ${playlistName}` : 'Current Playlist'} ({currentPlaylist.length} clip{currentPlaylist.length !== 1 ? 's' : ''})
             </Typography>
             {isEditingMode && (
               <Chip
@@ -1967,20 +2782,21 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
             )}
           </Box>
 
-          <DragDropContext onDragEnd={handleClipDragEnd}>
-            <Droppable droppableId="youtube-playlist-clips">
-              {(provided) => (
-                <List
-                  ref={provided.innerRef}
-                  {...provided.droppableProps}
-                  sx={{
-                    backgroundColor: 'background.paper',
-                    borderRadius: 2,
-                    border: `1px solid ${currentTheme.primary}20`,
-                    mb: 3
-                  }}
-                >
-                  {currentPlaylist.map((clip, index) => (
+          {currentPlaylist.length > 0 ? (
+            <DragDropContext onDragEnd={handleClipDragEnd}>
+              <Droppable droppableId="youtube-playlist-clips">
+                {(provided) => (
+                  <List
+                    ref={provided.innerRef}
+                    {...provided.droppableProps}
+                    sx={{
+                      backgroundColor: 'background.paper',
+                      borderRadius: 2,
+                      border: `1px solid ${currentTheme.primary}20`,
+                      mb: 3
+                    }}
+                  >
+                    {currentPlaylist.map((clip, index) => (
                     <Draggable key={clip.id} draggableId={clip.id} index={index}>
                       {(provided, snapshot) => (
                         <ListItem
@@ -2075,81 +2891,186 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
                       )}
                     </Draggable>
                   ))}
-                  {provided.placeholder}
-                </List>
-              )}
-            </Droppable>
-          </DragDropContext>
+                    {provided.placeholder}
+                  </List>
+                )}
+              </Droppable>
+            </DragDropContext>
+          ) : (
+            <Box sx={{
+              backgroundColor: 'background.paper',
+              borderRadius: 2,
+              border: `1px solid ${currentTheme.primary}20`,
+              p: 4,
+              textAlign: 'center',
+              mb: 3
+            }}>
+              <Typography variant="body1" color="text.secondary">
+                {isEditingMode ? 'This playlist is currently empty. Add clips by searching for videos above.' : 'No clips added yet. Search for videos and add them to your playlist.'}
+              </Typography>
+            </Box>
+          )}
 
-          <Box sx={{ textAlign: 'center' }}>
+          <Box sx={{
+            display: 'flex',
+            gap: 2,
+            justifyContent: 'center',
+            alignItems: 'center',
+            flexWrap: 'wrap'
+          }}>
+            {/* Quick Save Button - Only show in editing mode */}
+            {isEditingMode && (
+              <Button
+                variant="outlined"
+                size="large"
+                startIcon={quickSaveSuccess ? <CheckCircleIcon /> : <SaveIcon />}
+                onClick={handleQuickSave}
+                disabled={!editingPlaylist}
+                sx={{
+                  borderColor: quickSaveSuccess ? 'success.main' : currentTheme.primary,
+                  color: quickSaveSuccess ? 'success.main' : currentTheme.primary,
+                  fontWeight: 600,
+                  minWidth: 180,
+                  transition: 'all 0.3s ease',
+                  '&:hover': {
+                    borderColor: quickSaveSuccess ? 'success.dark' : currentTheme.secondary,
+                    backgroundColor: quickSaveSuccess ? alpha(theme.palette.success.main, 0.1) : alpha(currentTheme.primary, 0.1),
+                    transform: 'translateY(-1px)',
+                  }
+                }}
+              >
+                {quickSaveSuccess ? 'Saved!' : 'Save to Current Playlist'}
+              </Button>
+            )}
+
+            {/* Main Save/Update Button */}
             <Button
               variant="contained"
               size="large"
               onClick={handleSavePlaylist}
               sx={{
                 background: `linear-gradient(135deg, ${currentTheme.primary} 0%, ${currentTheme.secondary} 100%)`,
+                fontWeight: 600,
+                minWidth: 180,
+                transition: 'all 0.3s ease',
+                '&:hover': {
+                  transform: 'translateY(-1px)',
+                  boxShadow: 4,
+                }
               }}
             >
-              {isEditingMode ? 'Update Playlist' : 'Save Playlist'}
+              {isEditingMode ? 'Update Options...' : 'Save Playlist'}
             </Button>
           </Box>
         </Box>
       )}
 
-      {/* Video Player Dialog */}
+      {/* Enhanced Video Player Dialog */}
       <Dialog
         open={!!playingVideoId}
         onClose={handleClosePlayer}
-        maxWidth="lg"
+        maxWidth="xl"
         fullWidth
         PaperProps={{
           sx: {
-            backgroundColor: 'black',
+            backgroundColor: '#000',
+            borderRadius: 3,
+            overflow: 'hidden',
             '& .MuiDialogContent-root': {
               padding: 0
             }
           }
         }}
+        sx={{
+          '& .MuiDialog-paper': {
+            margin: 2,
+            maxHeight: 'calc(100vh - 32px)',
+          }
+        }}
       >
         <DialogTitle sx={{
           color: 'white',
-          backgroundColor: 'black',
+          backgroundColor: '#000',
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center'
+          alignItems: 'center',
+          py: 2,
+          px: 3,
+          borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
         }}>
-          <Typography variant="h6">Video Player</Typography>
-          <IconButton onClick={handleClosePlayer} sx={{ color: 'white' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <PlayIcon sx={{ color: currentTheme.primary }} />
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              Video Player
+            </Typography>
+          </Box>
+          <IconButton
+            onClick={handleClosePlayer}
+            sx={{
+              color: 'white',
+              '&:hover': {
+                backgroundColor: 'rgba(255, 255, 255, 0.1)',
+              }
+            }}
+          >
             ✕
           </IconButton>
         </DialogTitle>
-        <DialogContent sx={{ backgroundColor: 'black', p: 0 }}>
+        <DialogContent sx={{ backgroundColor: '#000', p: 0, position: 'relative' }}>
           {playingVideoId && (
-            <YouTube
-              videoId={playingVideoId}
-              opts={{
+            <Box sx={{
+              position: 'relative',
+              paddingBottom: '56.25%', // 16:9 aspect ratio
+              height: 0,
+              overflow: 'hidden',
+              '& iframe': {
+                position: 'absolute',
+                top: 0,
+                left: 0,
                 width: '100%',
-                height: '500',
-                playerVars: {
-                  autoplay: 1,
-                  start: playbackStartTime,
-                  modestbranding: 1,
-                  rel: 0
-                }
-              }}
-              onReady={(event) => {
-                if (playbackStartTime > 0) {
-                  event.target.seekTo(playbackStartTime);
-                }
-              }}
-            />
+                height: '100%',
+              }
+            }}>
+              <YouTube
+                videoId={playingVideoId}
+                opts={{
+                  width: '100%',
+                  height: '100%',
+                  playerVars: {
+                    autoplay: 1,
+                    start: playbackStartTime,
+                    modestbranding: 1,
+                    rel: 0,
+                    fs: 1, // Enable fullscreen
+                    cc_load_policy: 0,
+                    iv_load_policy: 3,
+                    enablejsapi: 1,
+                    origin: window.location.origin,
+                  }
+                }}
+                onReady={(event) => {
+                  if (playbackStartTime > 0) {
+                    event.target.seekTo(playbackStartTime);
+                  }
+                }}
+                onStateChange={(event) => {
+                  // Handle fullscreen changes if needed
+                  console.log('Player state changed:', event.data);
+                }}
+              />
+            </Box>
           )}
         </DialogContent>
       </Dialog>
 
       {/* Clip Configuration Dialog */}
       <Dialog open={clipDialogOpen} onClose={handleClipCancel} maxWidth="sm" fullWidth>
-        <DialogTitle>Configure Clip</DialogTitle>
+        <DialogTitle>
+          {sequentialExtractionActive
+            ? `Configure Clip - Video ${currentSequentialIndex + 1} of ${sequentialVideos.length}`
+            : 'Configure Clip'
+          }
+        </DialogTitle>
         <DialogContent>
           {selectedVideo && (
             <Box sx={{ pt: 2 }}>
@@ -2423,11 +3344,16 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleClipCancel}>Cancel</Button>
+          <Button onClick={handleClipCancel}>
+            {sequentialExtractionActive ? 'Cancel All' : 'Cancel'}
+          </Button>
           <Button onClick={handleClipConfirm} variant="contained">
-            {selectedVideo && currentPlaylist.some(clip => clip.videoId === selectedVideo.id)
-              ? 'Update Clip'
-              : 'Add to Playlist'
+            {sequentialExtractionActive
+              ? (currentSequentialIndex === sequentialVideos.length - 1 ? 'Finish' : 'Next Video')
+              : (selectedVideo && currentPlaylist.some(clip => clip.videoId === selectedVideo.id)
+                ? 'Update Clip'
+                : 'Add to Playlist'
+              )
             }
           </Button>
         </DialogActions>
@@ -2542,9 +3468,14 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
                   value="manual"
                   control={<Radio />}
                   label={
-                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                      <ScheduleIcon sx={{ mr: 1 }} />
-                      Manual time for each video
+                    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        <ScheduleIcon sx={{ mr: 1 }} />
+                        Manual time for each video
+                      </Box>
+                      <Typography variant="caption" color="text.secondary" sx={{ ml: 3, mt: 0.5 }}>
+                        Opens the minute extractor for each video sequentially
+                      </Typography>
                     </Box>
                   }
                 />
@@ -2593,75 +3524,17 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
               </Box>
             )}
 
-            {/* Manual Configuration */}
+            {/* Manual Configuration Info */}
             {timeSelectionMode === 'manual' && (
-              <Box sx={{ mb: 3 }}>
-                <Typography variant="h6" sx={{ mb: 2 }}>
-                  Individual Video Settings
+              <Box sx={{ mb: 3, p: 2, backgroundColor: 'info.main', color: 'info.contrastText', borderRadius: 1 }}>
+                <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>
+                  Sequential Manual Configuration
                 </Typography>
-                <Box sx={{ maxHeight: 400, overflowY: 'auto' }}>
-                  {selectedVideos.map((video) => {
-                    const config = videoTimeConfigs[video.id] || { startTime: 0, duration: 60 };
-                    const videoDuration = getVideoDuration(video);
-                    const maxStart = Math.max(0, videoDuration - config.duration);
-
-                    return (
-                      <Accordion key={video.id} sx={{ mb: 1 }}>
-                        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                            <img
-                              src={video.thumbnail}
-                              alt={video.title}
-                              style={{ width: 60, height: 45, marginRight: 16, borderRadius: 4 }}
-                            />
-                            <Box sx={{ flexGrow: 1 }}>
-                              <Typography variant="subtitle2" noWrap>
-                                {video.title}
-                              </Typography>
-                              <Typography variant="caption" color="text.secondary">
-                                Start: {formatTime(config.startTime)} • Duration: {config.duration}s
-                              </Typography>
-                            </Box>
-                          </Box>
-                        </AccordionSummary>
-                        <AccordionDetails>
-                          <Box sx={{ pt: 1 }}>
-                            <Typography variant="body2" sx={{ mb: 1 }}>
-                              Start Time: {formatTime(config.startTime)}
-                            </Typography>
-                            <Slider
-                              value={config.startTime}
-                              onChange={(_, value) => updateVideoTimeConfig(video.id, value as number, config.duration)}
-                              min={0}
-                              max={maxStart}
-                              step={1}
-                              marks={[
-                                { value: 0, label: '0:00' },
-                                { value: maxStart, label: formatTime(maxStart) }
-                              ]}
-                            />
-                            <Box sx={{ mt: 2 }}>
-                              <FormControl fullWidth size="small">
-                                <InputLabel>Duration</InputLabel>
-                                <Select
-                                  value={config.duration}
-                                  onChange={(e) => updateVideoTimeConfig(video.id, config.startTime, e.target.value as number)}
-                                  label="Duration"
-                                >
-                                  <MenuItem value={30}>30 seconds</MenuItem>
-                                  <MenuItem value={45}>45 seconds</MenuItem>
-                                  <MenuItem value={60}>60 seconds</MenuItem>
-                                  <MenuItem value={90}>90 seconds</MenuItem>
-                                  <MenuItem value={120}>2 minutes</MenuItem>
-                                </Select>
-                              </FormControl>
-                            </Box>
-                          </Box>
-                        </AccordionDetails>
-                      </Accordion>
-                    );
-                  })}
-                </Box>
+                <Typography variant="body2">
+                  When you click "Add Clips", the minute extractor will open for each video one by one.
+                  You'll be able to set precise start and end times for each video using the full interface
+                  with video preview and controls.
+                </Typography>
               </Box>
             )}
 
@@ -2670,7 +3543,7 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
               <Typography variant="body2" color="text.secondary">
                 {timeSelectionMode === 'random' && 'Random start times will be generated for each video.'}
                 {timeSelectionMode === 'same' && `All videos will start at ${formatTime(bulkStartTime)}.`}
-                {timeSelectionMode === 'manual' && 'Individual start times configured above will be used.'}
+                {timeSelectionMode === 'manual' && 'The minute extractor will open sequentially for each video, allowing you to set precise start and end times.'}
                 <br />
                 Total clips to add: {selectedVideos.length}
               </Typography>
@@ -2702,6 +3575,23 @@ const YouTubeSearch: React.FC<YouTubeSearchProps> = ({
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Success Snackbar */}
+      <Snackbar
+        open={snackbarOpen}
+        autoHideDuration={4000}
+        onClose={() => setSnackbarOpen(false)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <MuiAlert
+          onClose={() => setSnackbarOpen(false)}
+          severity="success"
+          variant="filled"
+          sx={{ width: '100%' }}
+        >
+          {snackbarMessage}
+        </MuiAlert>
+      </Snackbar>
     </Box>
   );
 };

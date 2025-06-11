@@ -7,6 +7,11 @@ import {
   Chip,
   useTheme,
   alpha,
+  Tabs,
+  Tab,
+  Divider,
+  IconButton,
+  Tooltip,
 } from '@mui/material';
 import {
   YouTube as YouTubeIcon,
@@ -14,18 +19,55 @@ import {
   Speed as SpeedIcon,
   Tune as TuneIcon,
   Search as SearchIcon,
+  AutoAwesome as MagicIcon,
+  ToggleOn as ToggleOnIcon,
+  ToggleOff as ToggleOffIcon,
 } from '@mui/icons-material';
 import { useThemeContext } from '../contexts/ThemeContext';
 import YouTubeSearchV2 from './YouTubeSearchV2';
+import PowerHourGenerator from './PowerHourGenerator';
+import EnhancedPowerHourGenerator from './EnhancedPowerHourGenerator';
+import { PowerHourGenerationResult } from '../types/powerHour';
+import { saveYouTubePlaylist, generatePlaylistId } from '../utils/youtubeUtils';
 
 const YouTubeV2: React.FC = () => {
   const theme = useTheme();
   const { currentTheme } = useThemeContext();
   const [editingPlaylist, setEditingPlaylist] = useState<any>(null);
+  const [currentTab, setCurrentTab] = useState(0);
+  const [useEnhancedGenerator, setUseEnhancedGenerator] = useState(true);
 
   const handlePlaylistUpdated = (playlist: any) => {
     console.log('Playlist updated:', playlist);
     setEditingPlaylist(null);
+  };
+
+  const handlePowerHourGenerated = (result: PowerHourGenerationResult) => {
+    // Convert generated clips to YouTube playlist format
+    const playlist = {
+      id: generatePlaylistId(),
+      name: result.clips.length > 0 ?
+        `Generated Power Hour - ${new Date().toLocaleDateString()}` :
+        'Generated Power Hour',
+      clips: result.clips,
+      date: new Date().toISOString(),
+      drinkingSoundPath: undefined,
+      imagePath: undefined,
+    };
+
+    // Save the generated playlist
+    const saved = saveYouTubePlaylist(playlist);
+    if (saved) {
+      console.log('✅ Generated Power Hour playlist saved successfully');
+      // Switch to search tab to show the saved playlist
+      setCurrentTab(0);
+    } else {
+      console.error('❌ Failed to save generated playlist');
+    }
+  };
+
+  const handleGeneratorCancel = () => {
+    console.log('Power Hour generation cancelled');
   };
 
   const features = [
@@ -49,47 +91,45 @@ const YouTubeV2: React.FC = () => {
       title: 'Unlimited Results',
       description: 'No API limits with configurable result counts',
     },
+    {
+      icon: <MagicIcon />,
+      title: 'Auto Generation',
+      description: 'AI-powered playlist generation with 60 perfect clips',
+    },
   ];
 
   return (
-    <Container maxWidth="xl" sx={{ py: 2 }}>
+    <Box>
       {/* Header Banner */}
       <Paper
         elevation={0}
         sx={{
           mb: 3,
-          p: 4,
-          borderRadius: 4,
+          p: 3,
+          borderRadius: 3,
           background: `linear-gradient(135deg, ${alpha(currentTheme.primary, 0.1)} 0%, ${alpha(currentTheme.secondary, 0.1)} 100%)`,
           border: `1px solid ${alpha(currentTheme.primary, 0.2)}`,
           position: 'relative',
           overflow: 'hidden',
-          '&::before': {
-            content: '""',
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: `linear-gradient(45deg, ${alpha(currentTheme.primary, 0.05)} 25%, transparent 25%, transparent 75%, ${alpha(currentTheme.primary, 0.05)} 75%), linear-gradient(45deg, ${alpha(currentTheme.primary, 0.05)} 25%, transparent 25%, transparent 75%, ${alpha(currentTheme.primary, 0.05)} 75%)`,
-            backgroundSize: '20px 20px',
-            backgroundPosition: '0 0, 10px 10px',
-            opacity: 0.3,
-          },
         }}
       >
         <Box sx={{ position: 'relative', zIndex: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-            <YouTubeIcon
+            <Box
               sx={{
-                fontSize: 48,
-                color: currentTheme.primary,
-                filter: `drop-shadow(0 4px 8px ${alpha(currentTheme.primary, 0.3)})`,
+                background: `linear-gradient(45deg, ${currentTheme.primary}, ${currentTheme.secondary})`,
+                borderRadius: 2,
+                p: 1.5,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
-            />
+            >
+              <MagicIcon sx={{ fontSize: 28, color: 'white' }} />
+            </Box>
             <Box>
               <Typography
-                variant="h4"
+                variant="h5"
                 sx={{
                   fontWeight: 700,
                   background: `linear-gradient(135deg, ${currentTheme.primary} 0%, ${currentTheme.secondary} 100%)`,
@@ -99,141 +139,154 @@ const YouTubeV2: React.FC = () => {
                   mb: 0.5,
                 }}
               >
-                YouTube Search V2
+                Random Playlist Generator
               </Typography>
-              <Typography variant="h6" color="text.secondary">
-                Next-generation YouTube search with enhanced features
+              <Typography variant="body1" color="text.secondary">
+                AI-powered playlist generation with 60 perfect clips
               </Typography>
             </Box>
-            <Chip
-              label="NEW"
-              size="small"
-              sx={{
-                ml: 'auto',
-                backgroundColor: currentTheme.secondary,
-                color: 'white',
-                fontWeight: 600,
-                animation: 'pulse 2s infinite',
-                '@keyframes pulse': {
-                  '0%': { transform: 'scale(1)' },
-                  '50%': { transform: 'scale(1.05)' },
-                  '100%': { transform: 'scale(1)' },
-                },
-              }}
-            />
           </Box>
 
-          {/* Features Grid */}
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: 'repeat(4, 1fr)' },
-              gap: 2,
-              mt: 3,
-            }}
-          >
-            {features.map((feature, index) => (
-              <Box
-                key={index}
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 1.5,
-                  p: 2,
-                  backgroundColor: alpha(theme.palette.background.paper, 0.8),
-                  borderRadius: 2,
-                  border: `1px solid ${alpha(currentTheme.primary, 0.1)}`,
-                  backdropFilter: 'blur(10px)',
-                  transition: 'all 0.3s ease',
-                  '&:hover': {
-                    transform: 'translateY(-2px)',
-                    boxShadow: `0 8px 24px ${alpha(currentTheme.primary, 0.2)}`,
-                    borderColor: currentTheme.primary,
-                  },
-                }}
-              >
-                <Box
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: 40,
-                    height: 40,
-                    borderRadius: 2,
-                    backgroundColor: alpha(currentTheme.primary, 0.1),
-                    color: currentTheme.primary,
-                    flexShrink: 0,
-                  }}
-                >
-                  {feature.icon}
-                </Box>
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 0.5 }}>
-                    {feature.title}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.3 }}>
-                    {feature.description}
-                  </Typography>
-                </Box>
-              </Box>
-            ))}
+          {/* Quick Stats */}
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 2 }}>
+            <Chip
+              label="Auto Generation"
+              size="small"
+              sx={{
+                backgroundColor: alpha(currentTheme.primary, 0.1),
+                color: currentTheme.primary,
+                fontWeight: 600,
+              }}
+            />
+            <Chip
+              label="Music Similarity"
+              size="small"
+              sx={{
+                backgroundColor: alpha(currentTheme.secondary, 0.1),
+                color: currentTheme.secondary,
+                fontWeight: 600,
+              }}
+            />
+            <Chip
+              label="60 Perfect Clips"
+              size="small"
+              sx={{
+                backgroundColor: alpha(theme.palette.success.main, 0.1),
+                color: theme.palette.success.main,
+                fontWeight: 600,
+              }}
+            />
           </Box>
         </Box>
       </Paper>
 
-      {/* Main Search Component */}
+      {/* Tab Navigation */}
       <Paper
         elevation={0}
         sx={{
-          borderRadius: 4,
+          borderRadius: 3,
+          overflow: 'hidden',
+          border: `1px solid ${alpha(currentTheme.primary, 0.1)}`,
+          background: alpha(theme.palette.background.paper, 0.8),
+          backdropFilter: 'blur(20px)',
+          mb: 3,
+        }}
+      >
+        <Tabs
+          value={currentTab}
+          onChange={(_, newValue) => setCurrentTab(newValue)}
+          sx={{
+            borderBottom: `1px solid ${alpha(theme.palette.divider, 0.1)}`,
+            '& .MuiTab-root': {
+              fontWeight: 600,
+              textTransform: 'none',
+              fontSize: '1rem',
+              minHeight: 56,
+            },
+            '& .Mui-selected': {
+              color: currentTheme.primary,
+            },
+            '& .MuiTabs-indicator': {
+              backgroundColor: currentTheme.primary,
+              height: 3,
+            },
+          }}
+        >
+          <Tab
+            icon={<SearchIcon />}
+            iconPosition="start"
+            label="Manual Search"
+            sx={{ px: 3 }}
+          />
+          <Tab
+            icon={<MagicIcon />}
+            iconPosition="start"
+            label={
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                Auto Generate
+                {useEnhancedGenerator && (
+                  <Chip
+                    label="Enhanced"
+                    size="small"
+                    color="primary"
+                    variant="outlined"
+                    sx={{ fontSize: '0.7rem', height: 20 }}
+                  />
+                )}
+                <Tooltip title={useEnhancedGenerator ? "Switch to Basic Generator" : "Switch to Enhanced Generator"}>
+                  <IconButton
+                    size="small"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setUseEnhancedGenerator(!useEnhancedGenerator);
+                    }}
+                    sx={{ ml: 1, p: 0.5 }}
+                  >
+                    {useEnhancedGenerator ? <ToggleOnIcon color="primary" /> : <ToggleOffIcon />}
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            }
+            sx={{ px: 3 }}
+          />
+        </Tabs>
+      </Paper>
+
+      {/* Tab Content */}
+      <Paper
+        elevation={0}
+        sx={{
+          borderRadius: 3,
           overflow: 'hidden',
           border: `1px solid ${alpha(currentTheme.primary, 0.1)}`,
           background: alpha(theme.palette.background.paper, 0.8),
           backdropFilter: 'blur(20px)',
         }}
       >
-        <YouTubeSearchV2
-          editingPlaylist={editingPlaylist}
-          onPlaylistUpdated={handlePlaylistUpdated}
-        />
-      </Paper>
+        {currentTab === 0 && (
+          <YouTubeSearchV2
+            editingPlaylist={editingPlaylist}
+            onPlaylistUpdated={handlePlaylistUpdated}
+          />
+        )}
 
-      {/* Footer Info */}
-      <Box sx={{ mt: 3, textAlign: 'center' }}>
-        <Typography variant="body2" color="text.secondary">
-          Powered by yt-dlp for unlimited YouTube access • No API restrictions
-        </Typography>
-        <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1, mt: 1 }}>
-          <Chip
-            label="yt-dlp Enabled"
-            size="small"
-            sx={{
-              backgroundColor: alpha(currentTheme.primary, 0.1),
-              color: currentTheme.primary,
-              fontWeight: 600,
-            }}
-          />
-          <Chip
-            label="Unlimited Results"
-            size="small"
-            sx={{
-              backgroundColor: alpha(currentTheme.secondary, 0.1),
-              color: currentTheme.secondary,
-              fontWeight: 600,
-            }}
-          />
-          <Chip
-            label="Modern UI"
-            size="small"
-            sx={{
-              backgroundColor: alpha(theme.palette.success.main, 0.1),
-              color: theme.palette.success.main,
-              fontWeight: 600,
-            }}
-          />
-        </Box>
-      </Box>
-    </Container>
+        {currentTab === 1 && (
+          <Box sx={{ p: 3 }}>
+            {useEnhancedGenerator ? (
+              <EnhancedPowerHourGenerator
+                onPlaylistGenerated={handlePowerHourGenerated}
+                onCancel={handleGeneratorCancel}
+              />
+            ) : (
+              <PowerHourGenerator
+                onPlaylistGenerated={handlePowerHourGenerated}
+                onCancel={handleGeneratorCancel}
+              />
+            )}
+          </Box>
+        )}
+      </Paper>
+    </Box>
   );
 };
 
