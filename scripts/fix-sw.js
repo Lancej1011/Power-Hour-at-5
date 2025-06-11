@@ -28,12 +28,19 @@ function fixServiceWorker() {
   // Fix the navigation route handler to use the correct path
   swContent = swContent.replace(/createHandlerBoundToURL\("index\.html"\)/g, 'createHandlerBoundToURL("/index.html")');
 
-  // Remove the navigation route entirely to prevent the error
-  swContent = swContent.replace(/,e\.registerRoute\(new e\.NavigationRoute\(e\.createHandlerBoundToURL\("index\.html"\)\)\)/g, '');
-  swContent = swContent.replace(/e\.registerRoute\(new e\.NavigationRoute\(e\.createHandlerBoundToURL\("index\.html"\)\)\)/g, '');
+  // Remove the navigation route entirely to prevent the error - multiple patterns
+  swContent = swContent.replace(/,e\.registerRoute\(new e\.NavigationRoute\(e\.createHandlerBoundToURL\("[^"]*"\)\)\)/g, '');
+  swContent = swContent.replace(/e\.registerRoute\(new e\.NavigationRoute\(e\.createHandlerBoundToURL\("[^"]*"\)\)\)/g, '');
 
-  // More specific pattern for the exact content
-  swContent = swContent.replace(/e\.cleanupOutdatedCaches\(\),e\.registerRoute\(new e\.NavigationRoute\(e\.createHandlerBoundToURL\("index\.html"\)\)\)/g, 'e.cleanupOutdatedCaches()');
+  // More specific patterns for different variations
+  swContent = swContent.replace(/e\.cleanupOutdatedCaches\(\),e\.registerRoute\(new e\.NavigationRoute\(e\.createHandlerBoundToURL\("[^"]*"\)\)\)/g, 'e.cleanupOutdatedCaches()');
+  swContent = swContent.replace(/,e\.registerRoute\(new e\.NavigationRoute\(e\.createHandlerBoundToURL\("\/index\.html"\)\)\)/g, '');
+  swContent = swContent.replace(/e\.registerRoute\(new e\.NavigationRoute\(e\.createHandlerBoundToURL\("\/index\.html"\)\)\)/g, '');
+
+  // Remove any remaining NavigationRoute references
+  swContent = swContent.replace(/new e\.NavigationRoute\([^)]*\)/g, 'null');
+  swContent = swContent.replace(/e\.registerRoute\(null\)/g, '');
+  swContent = swContent.replace(/,e\.registerRoute\(null\)/g, '');
 
   console.log('Content changed:', originalContent !== swContent);
   console.log('Fixed SW content contains index.html:', swContent.includes('index.html'));

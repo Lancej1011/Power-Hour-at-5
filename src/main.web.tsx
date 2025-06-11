@@ -1,19 +1,74 @@
 // Global error handler for filter errors - MUST BE FIRST
 const originalArrayFilter = Array.prototype.filter;
+const originalArrayMap = Array.prototype.map;
+const originalArrayForEach = Array.prototype.forEach;
+
+// Override Array.prototype.filter with comprehensive error handling
 Array.prototype.filter = function(callback, thisArg) {
   try {
-    if (this == null) {
+    if (this == null || this === undefined) {
       console.warn('filter() called on null or undefined, returning empty array');
       return [];
     }
     if (!Array.isArray(this)) {
       console.warn('filter() called on non-array, converting to array');
-      return Array.from(this).filter(callback, thisArg);
+      try {
+        return Array.from(this).filter(callback, thisArg);
+      } catch (conversionError) {
+        console.error('Failed to convert to array:', conversionError);
+        return [];
+      }
     }
     return originalArrayFilter.call(this, callback, thisArg);
   } catch (error) {
-    console.error('Error in filter operation:', error);
+    console.error('Error in filter operation:', error, 'Context:', this);
     return [];
+  }
+};
+
+// Override Array.prototype.map with error handling
+Array.prototype.map = function(callback, thisArg) {
+  try {
+    if (this == null || this === undefined) {
+      console.warn('map() called on null or undefined, returning empty array');
+      return [];
+    }
+    if (!Array.isArray(this)) {
+      console.warn('map() called on non-array, converting to array');
+      try {
+        return Array.from(this).map(callback, thisArg);
+      } catch (conversionError) {
+        console.error('Failed to convert to array:', conversionError);
+        return [];
+      }
+    }
+    return originalArrayMap.call(this, callback, thisArg);
+  } catch (error) {
+    console.error('Error in map operation:', error, 'Context:', this);
+    return [];
+  }
+};
+
+// Override Array.prototype.forEach with error handling
+Array.prototype.forEach = function(callback, thisArg) {
+  try {
+    if (this == null || this === undefined) {
+      console.warn('forEach() called on null or undefined, skipping');
+      return;
+    }
+    if (!Array.isArray(this)) {
+      console.warn('forEach() called on non-array, converting to array');
+      try {
+        Array.from(this).forEach(callback, thisArg);
+        return;
+      } catch (conversionError) {
+        console.error('Failed to convert to array:', conversionError);
+        return;
+      }
+    }
+    return originalArrayForEach.call(this, callback, thisArg);
+  } catch (error) {
+    console.error('Error in forEach operation:', error, 'Context:', this);
   }
 };
 
