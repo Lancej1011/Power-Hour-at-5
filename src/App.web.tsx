@@ -103,19 +103,19 @@ function AppContent() {
       <CssBaseline />
       
       {/* Header */}
-      <AppBar position="static" elevation={0} sx={{ 
-        bgcolor: currentTheme.colors.primary,
-        borderBottom: `1px solid ${currentTheme.colors.border}`
+      <AppBar position="static" elevation={0} sx={{
+        bgcolor: currentTheme.primary,
+        borderBottom: `1px solid rgba(255,255,255,0.1)`
       }}>
         <Toolbar>
           <IconButton edge="start" color="inherit" sx={{ mr: 2 }}>
             <MusicNoteIcon />
           </IconButton>
           <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center' }}>
-            <Box component="span" sx={{ 
-              fontSize: '1.5rem', 
+            <Box component="span" sx={{
+              fontSize: '1.5rem',
               fontWeight: 'bold',
-              background: `linear-gradient(45deg, ${currentTheme.colors.accent}, ${currentTheme.colors.secondary})`,
+              background: `linear-gradient(45deg, ${currentTheme.secondary}, ${currentTheme.primary})`,
               WebkitBackgroundClip: 'text',
               WebkitTextFillColor: 'transparent',
               backgroundClip: 'text'
