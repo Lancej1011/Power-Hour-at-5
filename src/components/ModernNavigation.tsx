@@ -300,6 +300,8 @@ const ModernNavigation: React.FC<ModernNavigationProps> = ({
 };
 
 // Default tabs for the Power Hour app
+import LocalBarIcon from '@mui/icons-material/LocalBar';
+
 export const defaultTabs: NavigationTab[] = [
   {
     label: 'Create Mix',
@@ -312,6 +314,12 @@ export const defaultTabs: NavigationTab[] = [
     value: 'playlists',
     icon: <QueueMusicIcon />,
     tooltip: 'Manage your saved playlists',
+  },
+  {
+    label: 'Power Hour V2',
+    value: 'powerv2',
+    icon: <LocalBarIcon />,
+    tooltip: 'New streamlined Power Hour builder'
   },
   {
     label: 'Visualizer',
@@ -340,6 +348,12 @@ export const authAwareTabs: NavigationTab[] = [
     value: 'youtube',
     icon: <LibraryMusicIcon />,
     tooltip: 'Create Power Hour playlists from YouTube videos',
+  },
+  {
+    label: 'Power Hour V2',
+    value: 'powerv2',
+    icon: <LocalBarIcon />,
+    tooltip: 'New streamlined Power Hour builder'
   },
   {
     label: 'Community',

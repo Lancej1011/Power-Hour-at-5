@@ -16,6 +16,7 @@ import { OnboardingFlow } from './components/auth';
 import { CollaborationNotifications } from './components/playlist';
 import { UpdateManager } from './components/UpdateManager';
 import DebugPage from './pages/DebugPage';
+import PowerHourV2Page from './pages/PowerHourV2Page';
 import {
   CssBaseline,
   AppBar,
@@ -81,6 +82,9 @@ function AppContent() {
         break;
       case '/youtube':
         setCurrentTab('youtube');
+        break;
+      case '/powerv2':
+        setCurrentTab('powerv2');
         break;
       case '/community':
         // Only set community tab if user is authenticated
@@ -481,6 +485,7 @@ function AppContent() {
                   <Route path="/playlists" element={<Playlists onPlayMix={playMix} />} />
                   <Route path="/youtube" element={<YouTube />} />
                   <Route path="/community" element={<SharedPlaylists />} />
+                  <Route path="/powerv2" element={<PowerHourV2Page />} />
                   <Route path="/youtube-player/:playlistId" element={<YouTubePlaylistPlayer />} />
                   <Route path="/debug" element={<DebugPage />} />
                 </Routes>
