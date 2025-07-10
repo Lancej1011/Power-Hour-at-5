@@ -156,6 +156,7 @@ interface LibrarySong {
 
 interface SongUploaderProps {
   playMix: (mix: any) => void;
+  hideLibraryControls?: boolean;
 }
 
 // Add a type definition for the clip metadata
@@ -204,7 +205,7 @@ interface Playlist {
   drinkingSoundPath?: string;
 }
 
-const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
+const SongUploader: React.FC<SongUploaderProps> = ({ playMix, hideLibraryControls = false }) => {
   const theme = useTheme();
   const { currentTheme } = useThemeContext();
   const navigate = useNavigate();
@@ -3490,7 +3491,8 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
           width: '100%',
           position: 'relative'
         }}>
-          {/* Left side - Manage Library Button positioned under Create Mix nav */}
+          {/* Hide library management controls if requested */}
+          {!hideLibraryControls && (
           <div style={{ position: 'absolute', left: '145px' }}>
             <Button
               variant="outlined"
@@ -3502,6 +3504,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
               Manage Library
             </Button>
           </div>
+          )}
 
           {/* Center - Library Title */}
           <div style={{
@@ -3568,6 +3571,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
         </Menu>
 
         {/* Quick Filters and Search Bar */}
+        {!hideLibraryControls && (
         <div style={{ padding: '0 0 16px 0', width: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', maxWidth: '80%' }}>
             {/* Quick Filters */}
@@ -3641,6 +3645,7 @@ const SongUploader: React.FC<SongUploaderProps> = ({ playMix }) => {
             </div>
           </div>
         </div>
+        )}
 
         {/* Extract Action Buttons for Selected Songs */}
         {selectedSongs.size > 0 && (
